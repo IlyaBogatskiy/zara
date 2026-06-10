@@ -1,0 +1,115 @@
+# Zara Size Tracker Bot — full stack in one command:
+#
+#   cp .env.example .env   # fill in TELEGRAM_BOT_TOKEN (and optionally the rest)
+#   docker compose up -d --build
+#
+# Services:
+#   postgres  — subscriptions + product facts (the source of truth)
+#   selenium  — headless Chrome for the scraping fallback; the bot image itself
+#               has no browser and talks to this container via RemoteWebDriver
+#   bot       — the Spring Boot application
+#
+# Operator API (no auth!) and the Selenium debug ports are bound to 127.0.0.1
+# only — nothing is exposed to the outside world.
+
+name: zara-bot
+
+services:
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: zara_bot
+      POSTGRES_USER: ${POSTGRES_USER:-zara}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zara_pass}
+    volumes:
+      # named volume: survives `docker compose down` (data is lost only with -v)
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # localhost-only, for inspecting the DB with psql/IDE; remove if not needed.
+      # Host port 5433: 5432 is commonly taken by another local Postgres
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zara} -d zara_bot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  selenium:
+    image: selenium/standalone-chrome:4.44.0   # keep in sync with selenium.version in pom.xml
+    restart: unless-stopped
+    # Chrome crashes with the default 64 MB /dev/shm — 2 GB is the documented minimum
+    shm_size: "2g"
+    environment:
+      # ScrapingExecutor allows 2 concurrent loads + the scheduler/canary may add one
+      SE_NODE_MAX_SESSIONS: 3
+      # how long a session request may wait in the queue before failing (seconds)
+      SE_SESSION_REQUEST_TIMEOUT: 120
+      # kill abandoned browser sessions after this idle time (seconds)
+      SE_NODE_SESSION_TIMEOUT: 120
+      # noVNC without a password — safe because the port is localhost-only
+      SE_VNC_NO_PASSWORD: "1"
+    ports:
+      # Grid console: http://localhost:4444 (sessions, queue)
+      - "127.0.0.1:4444:4444"
+      # noVNC: http://localhost:7900 — watch the real browser while debugging
+      - "127.0.0.1:7900:7900"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4444/wd/hub/status | grep -q '\"ready\": *true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      selenium:
+        condition: service_healthy
+    environment:
+      # --- required ---
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in .env}
+      # --- database (service name as the host) ---
+      DB_URL: jdbc:postgresql://postgres:5432/zara_bot
+      DB_USERNAME: ${POSTGRES_USER:-zara}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-zara_pass}
+      # --- scraping: Selenium fallback goes to the container, not a local Chrome ---
+      ZARA_DRIVER_REMOTE_URL: http://selenium:4444
+      # --- operator alerts (selector breakage etc.); 0 = log only ---
+      ZARA_ADMIN_CHAT_ID: ${ZARA_ADMIN_CHAT_ID:-0}
+    ports:
+      # operator API + Swagger UI (http://localhost:8100/swagger-ui.html).
+      # localhost-only on purpose: the API has no authentication
+      - "127.0.0.1:8100:8100"
+    volumes:
+      # parsing-failure dumps (HTML + screenshots). A named volume avoids the
+      # Docker Desktop bind-mount quirks on Windows; to browse dumps run:
+      #   docker compose cp bot:/app/dumps ./dumps
+      # (or swap this line for a bind mount: ./dumps:/app/dumps)
+      - dumps:/app/dumps
+    healthcheck:
+      # springdoc endpoint — up once the Spring context is fully started
+      test: ["CMD-SHELL", "curl -sf http://localhost:8100/v3/api-docs > /dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+
+volumes:
+  pgdata:
+  dumps:

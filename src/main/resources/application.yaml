@@ -1,0 +1,43 @@
+server:
+  port: 8100
+---
+telegram:
+  token: ${TELEGRAM_BOT_TOKEN:8246166840:AAFbWry69EED8IEX3hUbL76kO4vW19SR_fQ}
+---
+zara:
+  monitor:
+    period-ms: 60000
+  api:
+    enabled: true       # fast JSON path; false — Selenium only
+  driver:
+    wait-seconds: 15
+    remote-url: ${ZARA_DRIVER_REMOTE_URL:}   # Selenium Grid URL; blank = local ChromeDriver
+  canary:
+    enabled: true       # periodic Selenium-vs-API cross-check
+    initial-delay-ms: 600000   # first run 10 minutes after startup
+    period-ms: 21600000        # then every 6 hours
+  admin-chat-id: ${ZARA_ADMIN_CHAT_ID:0}   # operator chatId for alerts; 0 = log only
+---
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/zara_bot}
+    username: ${DB_USERNAME:zara}
+    password: ${DB_PASSWORD:zara_pass}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update   # dev only; switch to validate in production
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  sql:
+    init:
+      mode: never
+
+logging:
+  level:
+    org.hibernate.SQL: debug
+    org.hibernate.orm.jdbc.bind: trace

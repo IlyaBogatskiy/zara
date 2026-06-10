@@ -1,0 +1,14 @@
+target/
+dumps/
+docs/
+.idea/
+.mvn/
+mvnw
+mvnw.cmd
+*.md
+.gitignore
+.gitattributes
+.env
+.env.example
+docker-compose.yaml
+Dockerfile

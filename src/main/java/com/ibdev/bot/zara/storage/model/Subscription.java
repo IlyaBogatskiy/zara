@@ -1,0 +1,89 @@
+package com.ibdev.bot.zara.storage.model;
+
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+import java.time.Instant;
+
+/**
+ * The user's intent: a chat tracks a product size. One row per size.
+ * A single row per (chat, product, size) triple for all time: unsubscribing does
+ * not delete the row but closes it (closedAt + reason); re-subscribing reopens it.
+ * lastKnownInStock is updated by the scheduler every tick — after a restart the
+ * monitoring continues from the exact state it stopped at.
+ *
+ * @author i.bogatskii
+ */
+@Entity
+@Getter
+@Setter
+@NoArgsConstructor
+@Table(
+        name = "subscriptions",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_sub_chat_product_size",
+                columnNames = {"chat_id", "product_key", "size_label"}
+        ),
+        indexes = {
+                @Index(name = "idx_sub_product_key", columnList = "product_key"),
+                @Index(name = "idx_sub_chat_id", columnList = "chat_id")
+        }
+)
+public class Subscription {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "chat_id", nullable = false)
+    private Long chatId;
+
+    @Column(name = "product_key", nullable = false)
+    private String productKey;
+
+    /** Raw normalized size string ("S", "40", "*") — no enum mapping, no data loss. */
+    @Column(name = "size_label", nullable = false)
+    private String sizeLabel;
+
+    @Column(name = "created_at", nullable = false)
+    private Instant createdAt;
+
+    @Column(name = "last_known_in_stock")
+    private Boolean lastKnownInStock;
+
+    @Column(name = "last_checked_at")
+    private Instant lastCheckedAt;
+
+    @Column(name = "closed_at")
+    private Instant closedAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "close_reason")
+    private SubscriptionChangeReason closeReason;
+
+    public Subscription(final Long chatId, final String productKey, final String sizeLabel) {
+        this.chatId = chatId;
+        this.productKey = productKey;
+        this.sizeLabel = sizeLabel;
+        this.createdAt = Instant.now();
+        this.lastKnownInStock = false;
+    }
+
+    public boolean isActive() {
+        return this.closedAt == null;
+    }
+
+    public void close(final SubscriptionChangeReason reason) {
+        this.closedAt = Instant.now();
+        this.closeReason = reason;
+    }
+
+    public void reopen() {
+        this.closedAt = null;
+        this.closeReason = null;
+        this.lastKnownInStock = false;
+        this.lastCheckedAt = null;
+    }
+}
