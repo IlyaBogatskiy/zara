@@ -51,6 +51,25 @@ export ZARA_ADMIN_CHAT_ID=<ваш chatId для технических алер�
 
 Схема БД создаётся автоматически (`ddl-auto: update`); при первом старте на новой схеме данные из легаси-таблиц мигрируются сами.
 
+### Состав compose-стека
+
+`docker-compose.yaml` поднимает три сервиса (`docker compose up -d --build`):
+
+| Сервис | Образ | Назначение | Порты (только `127.0.0.1`) |
+|---|---|---|---|
+| `postgres` | `postgres:17-alpine` | подписки и факты о товарах — источник истины | `5433` → 5432 (для psql/IDE) |
+| `selenium` | `selenium/standalone-chrome:4.44.0` | headless Chrome для Selenium-фоллбека; сам образ бота браузера не содержит и ходит сюда через `RemoteWebDriver` | `4444` (Grid-консоль), `7900` (noVNC — смотреть живой браузер) |
+| `bot` | сборка из `Dockerfile` | Spring Boot приложение | `8100` (операторский API + Swagger) |
+
+Детали:
+
+- **Все порты привязаны к `127.0.0.1`** — наружу ничего не торчит (операторский API без аутентификации, noVNC без пароля). Postgres проброшен на host-порт **5433**, потому что 5432 часто занят локальной базой.
+- **Зависимости по health-check**: `bot` стартует только после того, как `postgres` и `selenium` стали `healthy` (`depends_on … condition: service_healthy`).
+- **Связь внутри сети**: бот ходит в БД по `jdbc:postgresql://postgres:5432/zara_bot`, а в Selenium — по `ZARA_DRIVER_REMOTE_URL=http://selenium:4444` (имена сервисов как хосты).
+- **Тома (named volumes)**: `pgdata` — данные Postgres (переживают `docker compose down`, теряются только с `-v`); `dumps` — HTML+скриншоты при ошибках парсинга. Чтобы вытащить дампы на хост: `docker compose cp bot:/app/dumps ./dumps` (или заменить том на bind-mount `./dumps:/app/dumps`).
+- **Лимиты памяти**: postgres 512m, selenium 2g (+ `shm_size: 2g`, иначе Chrome падает на дефолтных 64 МБ `/dev/shm`), bot 768m.
+- **Переменные из `.env`**: обязательная `TELEGRAM_BOT_TOKEN`; опциональные `POSTGRES_USER`/`POSTGRES_PASSWORD` (по умолчанию `zara`/`zara_pass`) и `ZARA_ADMIN_CHAT_ID` (по умолчанию `0` — только лог).
+
 ### Конфигурация (`zara.*` в application.yaml)
 
 | Свойство | По умолчанию | Описание |
@@ -119,6 +138,25 @@ export ZARA_ADMIN_CHAT_ID=<your chatId for technical alerts>   # optional
 
 The DB schema is created automatically (`ddl-auto: update`); on the first start with the new schema, legacy data migrates itself.
 
+### Compose stack layout
+
+`docker-compose.yaml` brings up three services (`docker compose up -d --build`):
+
+| Service | Image | Purpose | Ports (`127.0.0.1` only) |
+|---|---|---|---|
+| `postgres` | `postgres:17-alpine` | subscriptions and product facts — the source of truth | `5433` → 5432 (for psql/IDE) |
+| `selenium` | `selenium/standalone-chrome:4.44.0` | headless Chrome for the Selenium fallback; the bot image has no browser and talks to it via `RemoteWebDriver` | `4444` (Grid console), `7900` (noVNC — watch the live browser) |
+| `bot` | built from `Dockerfile` | the Spring Boot application | `8100` (operator API + Swagger) |
+
+Details:
+
+- **All ports are bound to `127.0.0.1`** — nothing is exposed to the outside (the operator API has no auth, noVNC has no password). Postgres is published on host port **5433** because 5432 is often taken by a local database.
+- **Health-check dependencies**: `bot` starts only after `postgres` and `selenium` are `healthy` (`depends_on … condition: service_healthy`).
+- **In-network wiring**: the bot reaches the DB at `jdbc:postgresql://postgres:5432/zara_bot` and Selenium at `ZARA_DRIVER_REMOTE_URL=http://selenium:4444` (service names as hostnames).
+- **Named volumes**: `pgdata` — Postgres data (survives `docker compose down`, lost only with `-v`); `dumps` — HTML + screenshots on parsing failures. To pull dumps onto the host: `docker compose cp bot:/app/dumps ./dumps` (or swap the volume for a bind mount `./dumps:/app/dumps`).
+- **Memory limits**: postgres 512m, selenium 2g (plus `shm_size: 2g`, otherwise Chrome crashes on the default 64 MB `/dev/shm`), bot 768m.
+- **Variables from `.env`**: the required `TELEGRAM_BOT_TOKEN`; optional `POSTGRES_USER`/`POSTGRES_PASSWORD` (default `zara`/`zara_pass`) and `ZARA_ADMIN_CHAT_ID` (default `0` — log only).
+
 ### Configuration (`zara.*` in application.yaml)
 
 | Property | Default | Description |
@@ -160,6 +198,22 @@ Architecture details: [`docs/CACHE_REDESIGN.md`](docs/CACHE_REDESIGN.md), backlo
 
 **Docker (sve uključeno):** `cp .env.example .env` (upišite `TELEGRAM_BOT_TOKEN`), zatim `docker compose up -d --build` — podižu se PostgreSQL, Chrome i bot.
 
+#### Sastav compose stack-a
+
+`docker-compose.yaml` podiže tri servisa:
+
+| Servis | Image | Namjena | Portovi (samo `127.0.0.1`) |
+|---|---|---|---|
+| `postgres` | `postgres:17-alpine` | pretplate i podaci o proizvodima — izvor istine | `5433` → 5432 (za psql/IDE) |
+| `selenium` | `selenium/standalone-chrome:4.44.0` | headless Chrome za Selenium rezervni put; image bota nema browser i komunicira preko `RemoteWebDriver` | `4444` (Grid konzola), `7900` (noVNC — gledanje živog browsera) |
+| `bot` | build iz `Dockerfile` | Spring Boot aplikacija | `8100` (operatorski API + Swagger) |
+
+- **Svi portovi su vezani za `127.0.0.1`** — ništa nije izloženo spolja (operatorski API bez autentifikacije, noVNC bez lozinke). Postgres je na host-portu **5433** jer je 5432 često zauzet lokalnom bazom.
+- **Zavisnosti po health-check-u**: `bot` startuje tek kad su `postgres` i `selenium` `healthy`.
+- **Veza unutar mreže**: bot ide na bazu preko `jdbc:postgresql://postgres:5432/zara_bot`, a na Selenium preko `ZARA_DRIVER_REMOTE_URL=http://selenium:4444` (imena servisa kao hostovi).
+- **Named volume-ovi**: `pgdata` — podaci Postgresa (preživljavaju `docker compose down`, gube se samo uz `-v`); `dumps` — HTML + screenshot-ovi pri greškama parsiranja (`docker compose cp bot:/app/dumps ./dumps`).
+- **Limiti memorije**: postgres 512m, selenium 2g (uz `shm_size: 2g`), bot 768m.
+
 **Ili lokalno** — potrebno: **JDK 21**, **PostgreSQL**, **Google Chrome** (za Selenium rezervni put).
 
 ```bash
@@ -193,6 +247,22 @@ Testovi bez spoljnih zavisnosti: `./mvnw test -Dtest=SubscriptionServiceIntegrat
 ### Brzi početak
 
 **Docker (sve uključeno):** `cp .env.example .env` (upišite `TELEGRAM_BOT_TOKEN`), zatim `docker compose up -d --build` — podižu se PostgreSQL, Chrome i bot.
+
+#### Sastav compose stack-a
+
+`docker-compose.yaml` podiže tri servisa:
+
+| Servis | Image | Namena | Portovi (samo `127.0.0.1`) |
+|---|---|---|---|
+| `postgres` | `postgres:17-alpine` | pretplate i podaci o proizvodima — izvor istine | `5433` → 5432 (za psql/IDE) |
+| `selenium` | `selenium/standalone-chrome:4.44.0` | headless Chrome za Selenium rezervni put; image bota nema browser i komunicira preko `RemoteWebDriver` | `4444` (Grid konzola), `7900` (noVNC — gledanje živog browsera) |
+| `bot` | build iz `Dockerfile` | Spring Boot aplikacija | `8100` (operatorski API + Swagger) |
+
+- **Svi portovi su vezani za `127.0.0.1`** — ništa nije izloženo spolja (operatorski API bez autentifikacije, noVNC bez lozinke). Postgres je na host-portu **5433** jer je 5432 često zauzet lokalnom bazom.
+- **Zavisnosti po health-check-u**: `bot` startuje tek kad su `postgres` i `selenium` `healthy`.
+- **Veza unutar mreže**: bot ide na bazu preko `jdbc:postgresql://postgres:5432/zara_bot`, a na Selenium preko `ZARA_DRIVER_REMOTE_URL=http://selenium:4444` (imena servisa kao hostovi).
+- **Named volume-ovi**: `pgdata` — podaci Postgresa (preživljavaju `docker compose down`, gube se samo uz `-v`); `dumps` — HTML + screenshot-ovi pri greškama parsiranja (`docker compose cp bot:/app/dumps ./dumps`).
+- **Limiti memorije**: postgres 512m, selenium 2g (uz `shm_size: 2g`), bot 768m.
 
 **Ili lokalno** — potrebno: **JDK 21**, **PostgreSQL**, **Google Chrome** (za Selenium rezervni put).
 
