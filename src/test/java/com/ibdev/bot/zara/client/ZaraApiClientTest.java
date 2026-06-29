@@ -8,9 +8,6 @@ import static com.ibdev.bot.zara.client.ClothingSizes.WHOLE;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Integration test: talks to the live Zara API (network required).
- * No Spring context — Postgres and Chrome are not needed.
- *
  * @author i.bogatskii
  */
 class ZaraApiClientTest {
@@ -21,14 +18,19 @@ class ZaraApiClientTest {
 
     @Test
     void checksAvailabilityViaLiveApi() {
-        final var state = client.checkSizesAvailability(
+        final var snapshot = client.checkSizesAvailability(
                 "https://www.zara.com/me/en/slogan-print-pocket-t-shirt-p03992419.html?v1=500559589&v2=2432042"
         );
 
+        assertNotNull(snapshot, "API должен вернуть снапшот товара");
+        final var state = snapshot.sizes();
         assertNotNull(state, "API должен вернуть состояние размеров");
         assertTrue(state.containsKey(WHOLE.getSize()), "должен присутствовать агрегат WHOLE (*)");
         assertTrue(state.size() > 1, "должен быть хотя бы один реальный размер помимо WHOLE");
         state.forEach((size, inStock) -> assertNotNull(inStock));
+
+        assertNotNull(snapshot.price(), "API должен вернуть цену");
+        assertTrue(snapshot.price().amount() > 0, "цена должна быть положительной");
     }
 
     @Test

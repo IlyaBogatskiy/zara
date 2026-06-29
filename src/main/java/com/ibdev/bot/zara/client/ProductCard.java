@@ -8,9 +8,6 @@ import lombok.Setter;
 import java.util.List;
 
 /**
- * Scraped product card — pure facts from the page, not tied to any chat.
- * By convention sizeDetails contains only the sizes that are OUT of stock.
- *
  * @author i.bogatskii
  */
 @Getter
@@ -23,4 +20,9 @@ public class ProductCard {
     private String name;
     private String link;
     private List<SizeInfo> sizeDetails;
+
+    /**
+     * Current price, or null when the scrape source could not read it.
+     */
+    private PriceInfo price;
 }

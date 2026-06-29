@@ -8,12 +8,6 @@ import lombok.Setter;
 import java.time.Instant;
 
 /**
- * The user's intent: a chat tracks a product size. One row per size.
- * A single row per (chat, product, size) triple for all time: unsubscribing does
- * not delete the row but closes it (closedAt + reason); re-subscribing reopens it.
- * lastKnownInStock is updated by the scheduler every tick — after a restart the
- * monitoring continues from the exact state it stopped at.
- *
  * @author i.bogatskii
  */
 @Entity
@@ -43,9 +37,20 @@ public class Subscription {
     @Column(name = "product_key", nullable = false)
     private String productKey;
 
-    /** Raw normalized size string ("S", "40", "*") — no enum mapping, no data loss. */
+    /**
+     * Raw normalized size string ("S", "40", "*") — no enum mapping, no data loss.
+     */
     @Column(name = "size_label", nullable = false)
     private String sizeLabel;
+
+    /**
+     * What this row is waiting for: a restock, or (after the user opted in) price/sell-out changes.
+     * Nullable on purpose — a NOT NULL column can't be added to an already-populated table by
+     * "ddl-auto: update" legacy rows read back as null and are treated as AWAIT_RESTOCK.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "mode")
+    private SubscriptionMode mode = SubscriptionMode.AWAIT_RESTOCK;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -83,6 +88,7 @@ public class Subscription {
     public void reopen() {
         this.closedAt = null;
         this.closeReason = null;
+        this.mode = SubscriptionMode.AWAIT_RESTOCK;
         this.lastKnownInStock = false;
         this.lastCheckedAt = null;
     }

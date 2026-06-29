@@ -20,18 +20,18 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import static com.ibdev.bot.zara.storage.model.SubscriptionChangeReason.USER_ACTION;
+import static com.ibdev.bot.zara.storage.model.SubscriptionMode.AWAIT_RESTOCK;
+import static com.ibdev.bot.zara.storage.model.SubscriptionMode.WATCH_IN_STOCK;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Telegram flow tests: updates are fed into the captured UpdatesListener,
- * pengrad models are built from JSON (their fields are snake_case for Gson).
- * Scraping is mocked; the ScrapingExecutor is real, hence timeout-based verifications.
- *
  * @author i.bogatskii
  */
 @ExtendWith(MockitoExtension.class)
@@ -87,7 +87,7 @@ class ZaraTelegramListenerTest {
     }
 
     private ProductCard card(final SizeInfo... sizes) {
-        return new ProductCard(KEY, "Test product", LINK, List.of(sizes));
+        return new ProductCard(KEY, "Test product", LINK, List.of(sizes), null);
     }
 
     private List<BaseRequest> requests(final int atLeast) {
@@ -105,14 +105,14 @@ class ZaraTelegramListenerTest {
         sendText("/start");
 
         final var sent = requests(1);
-        assertThat(textOf(sent.get(0))).contains("Привет");
+        assertThat(textOf(sent.getFirst())).contains("Привет");
     }
 
     @Test
     void nonLinkTextAsksForZaraLink() {
         sendText("просто текст");
 
-        assertThat(textOf(requests(1).get(0))).contains("Пришли ссылку");
+        assertThat(textOf(requests(1).getFirst())).contains("Пришли ссылку");
     }
 
     @Test
@@ -123,7 +123,7 @@ class ZaraTelegramListenerTest {
         sendText(LINK);
 
         final var sent = requests(2);
-        assertThat(textOf(sent.get(0))).contains("⏳");
+        assertThat(textOf(sent.getFirst())).contains("⏳");
         assertThat(textOf(sent.get(1))).contains("Test product", "отслеживать");
         assertThat(sent.get(1).getParameters().get("reply_markup")).isNotNull();
     }
@@ -171,7 +171,58 @@ class ZaraTelegramListenerTest {
     void staleCallbackWithoutSessionCardAsksToReopen() {
         sendCallback("CONFIRM");
 
-        assertThat(textOf(requests(1).get(0))).contains("Контекст устарел");
+        assertThat(textOf(requests(1).getFirst())).contains("Контекст устарел");
         verify(subscriptionService, never()).subscribe(anyLong(), any(), any());
+    }
+
+    @Test
+    void sizeAppearedKeepButtonSwitchesToWatchInStock() {
+        when(subscriptionService.watchInStock(CHAT, KEY, "S")).thenReturn(true);
+
+        sendCallback("SIZE_WATCH:" + KEY + ":S");
+
+        verify(subscriptionService).watchInStock(CHAT, KEY, "S");
+        assertThat(textOf(requests(1).getFirst())).contains("Слежу за размером S");
+    }
+
+    @Test
+    void sizeAppearedStopButtonUnsubscribes() {
+        sendCallback("SIZE_STOP:" + KEY + ":S");
+
+        verify(subscriptionService).unsubscribe(CHAT, KEY, Set.of("S"), USER_ACTION);
+        assertThat(textOf(requests(1).getFirst())).contains("больше не слежу за размером S");
+    }
+
+    @Test
+    void sizeSoldOutKeepButtonSwitchesBackToAwaitRestock() {
+        when(subscriptionService.awaitRestock(CHAT, KEY, "S")).thenReturn(true);
+
+        sendCallback("SIZE_AWAIT:" + KEY + ":S");
+
+        verify(subscriptionService).awaitRestock(CHAT, KEY, "S");
+        assertThat(textOf(requests(1).getFirst())).contains("ждать появления размера S");
+    }
+
+    @Test
+    void sizeDecisionForUnknownSubscriptionAsksToResend() {
+        when(subscriptionService.watchInStock(CHAT, KEY, "S")).thenReturn(false);
+
+        sendCallback("SIZE_WATCH:" + KEY + ":S");
+
+        assertThat(textOf(requests(1).getFirst())).contains("Не нашёл эту подписку");
+    }
+
+    @Test
+    void subscriptionsMenuMarksInStockPriceWatchesWithCoin() {
+        when(subscriptionService.getAllSubscribedSizes(CHAT)).thenReturn(Map.of(KEY, Set.of("S", "M")));
+        when(subscriptionService.getSubscribedSizeModes(CHAT, KEY))
+                .thenReturn(Map.of("S", WATCH_IN_STOCK, "M", AWAIT_RESTOCK));
+
+        sendText("📌 Подписки");
+
+        final var text = textOf(requests(1).getFirst());
+        assertThat(text).contains("S 💰");
+        assertThat(text).doesNotContain("M 💰");
+        assertThat(text).contains("💰 — слежу за ценой");
     }
 }

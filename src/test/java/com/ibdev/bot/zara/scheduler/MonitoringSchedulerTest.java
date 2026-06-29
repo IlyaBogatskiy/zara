@@ -1,8 +1,11 @@
 package com.ibdev.bot.zara.scheduler;
 
+import com.ibdev.bot.zara.client.PriceInfo;
+import com.ibdev.bot.zara.client.ProductSnapshot;
 import com.ibdev.bot.zara.notify.UserNotifier;
 import com.ibdev.bot.zara.service.page.PageService;
 import com.ibdev.bot.zara.service.subscription.SubscriptionService;
+import com.ibdev.bot.zara.service.subscription.SubscriptionService.Watch;
 import com.pengrad.telegrambot.TelegramBot;
 import com.pengrad.telegrambot.request.SendMessage;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,15 +23,14 @@ import java.util.Map;
 import java.util.Set;
 
 import static com.ibdev.bot.zara.storage.model.SubscriptionChangeReason.AUTO_AVAILABLE;
+import static com.ibdev.bot.zara.storage.model.SubscriptionMode.AWAIT_RESTOCK;
+import static com.ibdev.bot.zara.storage.model.SubscriptionMode.WATCH_IN_STOCK;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for the monitoring transition logic: "was out -> now in" = notification
- * + auto-unsubscribe, everything else stays silent. No Selenium, network or DB.
- *
  * @author i.bogatskii
  */
 @ExtendWith(MockitoExtension.class)
@@ -56,15 +58,28 @@ class MonitoringSchedulerTest {
         scheduler = new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot));
     }
 
-    private void stubProduct(final Map<Long, Set<String>> subscribers, final Map<String, Boolean> current) {
-        when(subscriptionService.activeProductKeys()).thenReturn(Set.of(KEY));
-        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
-        when(pageService.checkProductSizesAvailability(LINK)).thenReturn(current);
-        when(subscriptionService.getSubscribersByProduct(KEY)).thenReturn(subscribers);
+    private static Watch watch(final long chatId, final String size, final com.ibdev.bot.zara.storage.model.SubscriptionMode mode) {
+        return new Watch(chatId, size, mode);
     }
 
-    private void seed(final Map<String, Boolean> persisted) {
-        when(subscriptionService.loadLastKnown()).thenReturn(Map.of(KEY, persisted));
+    private static PriceInfo eur(final long amount) {
+        return new PriceInfo(amount, "EUR", 2);
+    }
+
+    private void stubProduct(final List<Watch> watches, final Map<String, Boolean> sizes, final PriceInfo price) {
+        when(subscriptionService.activeProductKeys()).thenReturn(Set.of(KEY));
+        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
+        when(pageService.checkProductSizesAvailability(LINK)).thenReturn(new ProductSnapshot(sizes, price));
+        when(subscriptionService.getActiveWatches(KEY)).thenReturn(watches);
+    }
+
+    private void seed(final Map<String, Boolean> sizes) {
+        seed(sizes, Map.of());
+    }
+
+    private void seed(final Map<String, Boolean> sizes, final Map<String, PriceInfo> prices) {
+        when(subscriptionService.loadLastKnown()).thenReturn(Map.of(KEY, sizes));
+        when(subscriptionService.loadLastKnownPrices()).thenReturn(prices);
         scheduler.seedLastKnown();
     }
 
@@ -79,21 +94,23 @@ class MonitoringSchedulerTest {
     }
 
     @Test
-    void notifiesAndUnsubscribesWhenSizeAppears() {
+    void asksToKeepWatchingWhenSizeAppearsAndDoesNotUnsubscribe() {
         seed(Map.of("S", false));
-        stubProduct(Map.of(1L, Set.of("S")), Map.of("S", true, "*", true));
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", true, "*", true), null);
 
         scheduler.monitor();
 
-        assertThat(textOf(sentMessages().get(0))).contains("Размер S", "Test product");
-        verify(subscriptionService).unsubscribe(1L, KEY, Set.of("S"), AUTO_AVAILABLE);
+        final var message = sentMessages().getFirst();
+        assertThat(textOf(message)).contains("Размер S", "Test product", "появился");
+        assertThat(message.getParameters().get("reply_markup")).isNotNull();
+        verify(subscriptionService, never()).unsubscribe(anyLong(), any(), any(), any());
         verify(subscriptionService).recordCheck(KEY, Map.of("S", true, "*", true));
     }
 
     @Test
     void staysSilentWhileSizeIsStillOutOfStock() {
         seed(Map.of("S", false));
-        stubProduct(Map.of(1L, Set.of("S")), Map.of("S", false, "*", false));
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", false, "*", false), null);
 
         scheduler.monitor();
 
@@ -105,56 +122,103 @@ class MonitoringSchedulerTest {
     @Test
     void noDuplicateNotificationAfterRestartWhenAlreadyInStock() {
         seed(Map.of("S", true));
-        stubProduct(Map.of(1L, Set.of("S")), Map.of("S", true, "*", true));
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", true, "*", true), null);
 
         scheduler.monitor();
 
         verify(telegramBot, never()).execute(any(SendMessage.class));
-        verify(subscriptionService, never()).unsubscribe(anyLong(), any(), any(), any());
     }
 
     @Test
     void absentHistoryIsTreatedAsOutOfStock() {
-        stubProduct(Map.of(1L, Set.of("S")), Map.of("S", true, "*", true));
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", true, "*", true), null);
 
         scheduler.monitor();
 
-        verify(subscriptionService).unsubscribe(1L, KEY, Set.of("S"), AUTO_AVAILABLE);
+        assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился");
+        verify(subscriptionService, never()).unsubscribe(anyLong(), any(), any(), any());
     }
 
     @Test
     void matchesSizesFuzzily() {
         seed(Map.of("40", false));
-        stubProduct(Map.of(1L, Set.of("40")), Map.of("EU40", true, "*", true));
+        stubProduct(List.of(watch(1L, "40", AWAIT_RESTOCK)), Map.of("EU40", true, "*", true), null);
 
         scheduler.monitor();
 
-        verify(subscriptionService).unsubscribe(1L, KEY, Set.of("40"), AUTO_AVAILABLE);
+        assertThat(textOf(sentMessages().getFirst())).contains("Размер 40", "появился");
     }
 
     @Test
     void notifiesEverySubscribedChatWithOneScrape() {
         seed(Map.of("S", false, "M", false));
         stubProduct(
-                Map.of(1L, Set.of("S"), 2L, Set.of("S", "M")),
-                Map.of("S", true, "M", false, "*", true)
+                List.of(watch(1L, "S", AWAIT_RESTOCK), watch(2L, "S", AWAIT_RESTOCK), watch(2L, "M", AWAIT_RESTOCK)),
+                Map.of("S", true, "M", false, "*", true),
+                null
         );
 
         scheduler.monitor();
 
         verify(pageService, times(1)).checkProductSizesAvailability(LINK);
-        verify(subscriptionService).unsubscribe(1L, KEY, Set.of("S"), AUTO_AVAILABLE);
-        verify(subscriptionService).unsubscribe(2L, KEY, Set.of("S"), AUTO_AVAILABLE);
-        verify(subscriptionService, never()).unsubscribe(eq(2L), eq(KEY), eq(Set.of("M")), any());
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(2);
+        assertThat(messages).allSatisfy(m -> assertThat(textOf(m)).contains("Размер S"));
+    }
+
+    @Test
+    void notifiesPriceDropForInStockWatcher() {
+        seed(Map.of("S", true), Map.of(KEY, eur(2995)));
+        stubProduct(List.of(watch(1L, "S", WATCH_IN_STOCK)), Map.of("S", true, "*", true), eur(1797));
+
+        scheduler.monitor();
+
+        assertThat(textOf(sentMessages().getFirst())).contains("снизилась", "29.95 EUR", "17.97 EUR");
+        verify(subscriptionService).recordPrice(KEY, eur(1797));
+    }
+
+    @Test
+    void noPriceNotificationWithoutABaseline() {
+        seed(Map.of("S", true));
+        stubProduct(List.of(watch(1L, "S", WATCH_IN_STOCK)), Map.of("S", true, "*", true), eur(1797));
+
+        scheduler.monitor();
+
+        verify(telegramBot, never()).execute(any(SendMessage.class));
+        verify(subscriptionService).recordPrice(KEY, eur(1797));
+    }
+
+    @Test
+    void priceMoveDoesNotNotifyAwaitRestockWatcher() {
+        seed(Map.of("S", false), Map.of(KEY, eur(2995)));
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", false, "*", false), eur(1797));
+
+        scheduler.monitor();
+
+        verify(telegramBot, never()).execute(any(SendMessage.class));
+        verify(subscriptionService).recordPrice(KEY, eur(1797));
+    }
+
+    @Test
+    void asksToKeepWaitingWhenWatchedSizeSellsOut() {
+        seed(Map.of("S", true), Map.of(KEY, eur(1797)));
+        stubProduct(List.of(watch(1L, "S", WATCH_IN_STOCK)), Map.of("S", false, "*", false), eur(1797));
+
+        scheduler.monitor();
+
+        final var message = sentMessages().getFirst();
+        assertThat(textOf(message)).contains("Размер S", "пропал");
+        assertThat(message.getParameters().get("reply_markup")).isNotNull();
+        verify(subscriptionService, never()).unsubscribe(anyLong(), any(), any(), any());
     }
 
     @Test
     void wholeProductWithMissingSizesOffersKeepMonitoringButton() {
-        stubProduct(Map.of(1L, Set.of("*")), Map.of("S", true, "M", false, "*", true));
+        stubProduct(List.of(watch(1L, "*", AWAIT_RESTOCK)), Map.of("S", true, "M", false, "*", true), null);
 
         scheduler.monitor();
 
-        final var message = sentMessages().get(0);
+        final var message = sentMessages().getFirst();
         assertThat(textOf(message)).contains("Товар появился", "[M]", "отсутствующими размерами");
         assertThat(message.getParameters().get("reply_markup")).isNotNull();
         verify(subscriptionService).unsubscribe(1L, KEY, Set.of("*"), AUTO_AVAILABLE);
@@ -162,11 +226,11 @@ class MonitoringSchedulerTest {
 
     @Test
     void wholeProductFullyAvailableJustStopsMonitoring() {
-        stubProduct(Map.of(1L, Set.of("*")), Map.of("S", true, "M", true, "*", true));
+        stubProduct(List.of(watch(1L, "*", AWAIT_RESTOCK)), Map.of("S", true, "M", true, "*", true), null);
 
         scheduler.monitor();
 
-        final var message = sentMessages().get(0);
+        final var message = sentMessages().getFirst();
         assertThat(textOf(message)).contains("остановил мониторинг");
         assertThat(message.getParameters().get("reply_markup")).isNull();
         verify(subscriptionService).unsubscribe(1L, KEY, Set.of("*"), AUTO_AVAILABLE);
@@ -174,7 +238,7 @@ class MonitoringSchedulerTest {
 
     @Test
     void wholeProductStillUnavailableStaysSilent() {
-        stubProduct(Map.of(1L, Set.of("*")), Map.of("S", false, "*", false));
+        stubProduct(List.of(watch(1L, "*", AWAIT_RESTOCK)), Map.of("S", false, "*", false), null);
 
         scheduler.monitor();
 
@@ -191,12 +255,13 @@ class MonitoringSchedulerTest {
         when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
         when(pageService.checkProductSizesAvailability("https://broken"))
                 .thenThrow(new RuntimeException("selenium died"));
-        when(pageService.checkProductSizesAvailability(LINK)).thenReturn(Map.of("S", true, "*", true));
-        when(subscriptionService.getSubscribersByProduct(KEY)).thenReturn(Map.of(1L, Set.of("S")));
+        when(pageService.checkProductSizesAvailability(LINK))
+                .thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null));
+        when(subscriptionService.getActiveWatches(KEY)).thenReturn(List.of(watch(1L, "S", AWAIT_RESTOCK)));
 
         scheduler.monitor();
 
-        verify(subscriptionService).unsubscribe(1L, KEY, Set.of("S"), AUTO_AVAILABLE);
+        assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился");
     }
 
     @Test

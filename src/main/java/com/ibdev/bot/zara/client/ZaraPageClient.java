@@ -27,9 +27,19 @@ public class ZaraPageClient {
     private static final By SIZE_LABEL = By.cssSelector("div[data-qa-qualifier='size-selector-sizes-size-label']");
     private static final By SIZE_BTN = By.cssSelector("button[data-qa-action^='size-']");
     private static final By ONE_TRUST_BTN = By.cssSelector("button#onetrust-accept-btn-handler");
+    private static final By PRICE_CURRENT = By.cssSelector(
+            "[data-qa-qualifier='price-amount-current'], .price__amount--current .money-amount__main");
 
-    /** In-stock marker within the size button's data-qa-action (e.g. "size-in-stock"). */
+    /**
+     * In-stock marker within the size button's data-qa-action (e.g. "size-in-stock").
+     */
     private static final String IN_STOCK_MARKER = "in-stock";
+
+    /**
+     * "17.97 EUR" / "1 797 RSD" → numeric group + currency-letters group.
+     */
+    private static final java.util.regex.Pattern PRICE_TEXT =
+            java.util.regex.Pattern.compile("([\\d.,\\s]+)\\s*([A-Za-z]{2,4})?");
 
     private final WebDriver webDriver;
     private final WebDriverWait webDriverWait;
@@ -49,6 +59,8 @@ public class ZaraPageClient {
 
         waitPageLoaded();
         acceptCookiesIfPresent();
+
+        dto.setPrice(readPrice());
         openSizesPopup();
 
         dto.setSizeDetails(readAllSizeDetails());
@@ -56,15 +68,17 @@ public class ZaraPageClient {
         return dto;
     }
 
-    public Map<String, Boolean> checkSizesAvailability(final String link) {
+    public ProductSnapshot checkSizesAvailability(final String link) {
         this.webDriver.get(link);
 
         if (isProductUnavailable()) {
-            return Map.of(WHOLE.getSize(), false);
+            return new ProductSnapshot(Map.of(WHOLE.getSize(), false), null);
         }
 
         waitPageLoaded();
         acceptCookiesIfPresent();
+
+        final var price = readPrice();
         openSizesPopup();
 
         final var sizeLis = this.webDriver.findElements(SIZE_LI);
@@ -97,7 +111,47 @@ public class ZaraPageClient {
 
         state.put(WHOLE.getSize(), anyInStock);
 
-        return state;
+        return new ProductSnapshot(state, price);
+    }
+
+    /**
+     * Best-effort current price. Price tracking is a sales nicety, not core
+     * monitoring, so any miss returns null instead of throwing — the API path is
+     * the reliable price source; this only matters when Selenium is the fallback.
+     */
+    private PriceInfo readPrice() {
+        try {
+            final var elements = this.webDriver.findElements(PRICE_CURRENT);
+            if (elements.isEmpty()) {
+                return null;
+            }
+            return parsePriceText(elements.getFirst().getText());
+        } catch (final Exception e) {
+            return null;
+        }
+    }
+
+    private PriceInfo parsePriceText(final String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+
+        final var matcher = PRICE_TEXT.matcher(raw.trim());
+        if (!matcher.find()) {
+            return null;
+        }
+
+        final var number = matcher.group(1).replaceAll("\\s", "");
+        final var currency = matcher.group(2);
+
+        final var separator = Math.max(number.lastIndexOf('.'), number.lastIndexOf(','));
+        final var fractionDigits = separator < 0 ? 0 : number.length() - separator - 1;
+        final var digitsOnly = number.replaceAll("[.,]", "");
+        if (digitsOnly.isEmpty()) {
+            return null;
+        }
+
+        return new PriceInfo(Long.parseLong(digitsOnly), currency == null ? null : currency.toUpperCase(), fractionDigits);
     }
 
 

@@ -11,7 +11,6 @@ import tools.jackson.databind.json.JsonMapper;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -19,11 +18,6 @@ import static com.ibdev.bot.zara.client.ClothingSizes.WHOLE;
 import static com.ibdev.bot.zara.util.ProductLinks.extractProductId;
 
 /**
- * The fast path: the products-details JSON endpoint used by Zara's own website.
- * ~0.5 s and ~40 KB versus 10–30 s and hundreds of MB of headless Chrome.
- * Every method returns null when the API is not applicable to the link or the
- * response is not recognized — the caller falls back to Selenium.
- *
  * @author i.bogatskii
  */
 @Log4j2
@@ -31,20 +25,25 @@ import static com.ibdev.bot.zara.util.ProductLinks.extractProductId;
 @RequiredArgsConstructor
 public class ZaraApiClient {
 
-    /** Store region/language from the link path, e.g. "/me/en/". */
+    /**
+     * Store region/language from the link path, e.g. "/me/en/".
+     */
     private static final Pattern STORE_PATH = Pattern.compile("^(/[a-z]{2}/[a-z]{2}/)");
 
-    /** low_on_stock still means the item can be bought. */
+    /**
+     * low_on_stock still means the item can be bought.
+     */
     private static final Set<String> IN_STOCK_VALUES = Set.of("in_stock", "low_on_stock");
 
     private final RestClient zaraRestClient;
     private final JsonMapper jsonMapper = JsonMapper.builder().build();
 
     /**
-     * Size availability: size → inStock, plus WHOLE ("*") → whether any size is in stock.
-     * The contract matches ZaraPageClient.checkSizesAvailability.
+     * Live snapshot: size availability (size → inStock, plus WHOLE "*" → whether any
+     * size is in stock) and the current price. The contract matches
+     * ZaraPageClient.checkSizesAvailability.
      */
-    public Map<String, Boolean> checkSizesAvailability(final String link) {
+    public ProductSnapshot checkSizesAvailability(final String link) {
         final var match = findColor(link);
         if (match == null) {
             return null;
@@ -74,7 +73,7 @@ public class ZaraApiClient {
         }
 
         state.put(WHOLE.getSize(), anyInStock);
-        return state;
+        return new ProductSnapshot(state, parsePrice(match.color()));
     }
 
     /**
@@ -105,7 +104,26 @@ public class ZaraApiClient {
         dto.setLink(link);
         dto.setName(match.productName());
         dto.setSizeDetails(outOfStock);
+        dto.setPrice(parsePrice(match.color()));
         return dto;
+    }
+
+    /**
+     * Current price from the color node: price is already in minor units,
+     * the currency/exponent live under pricing.price.currency. Returns null
+     * if the price is missing — price tracking is best-effort, never fatal.
+     */
+    private PriceInfo parsePrice(final JsonNode color) {
+        final var amount = color.path("price");
+        if (!amount.isNumber()) {
+            return null;
+        }
+
+        final var currency = color.path("pricing").path("price").path("currency");
+        final var code = currency.path("code").asString();
+        final var exponent = currency.path("exponent").asInt(-2);
+
+        return new PriceInfo(amount.asLong(), (code == null || code.isBlank()) ? null : code, -exponent);
     }
 
     private record ColorMatch(String productName, JsonNode color) {
@@ -143,7 +161,9 @@ public class ZaraApiClient {
         return null;
     }
 
-    /** A single transient network failure must not drop the request into the heavy Selenium fallback. */
+    /**
+     * A single transient network failure must not drop the request into the heavy Selenium fallback.
+     */
     private String fetchWithRetry(final String endpoint) {
         RestClientException lastFailure = null;
 

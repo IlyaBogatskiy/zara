@@ -1,9 +1,11 @@
 package com.ibdev.bot.zara.service.subscription;
 
 import com.ibdev.bot.zara.storage.model.SubscriptionChangeReason;
+import com.ibdev.bot.zara.client.PriceInfo;
 import com.ibdev.bot.zara.client.ProductCard;
 import com.ibdev.bot.zara.storage.model.Product;
 import com.ibdev.bot.zara.storage.model.Subscription;
+import com.ibdev.bot.zara.storage.model.SubscriptionMode;
 import com.ibdev.bot.zara.storage.repo.ProductRepository;
 import com.ibdev.bot.zara.storage.repo.SubscriptionRepository;
 import lombok.RequiredArgsConstructor;
@@ -15,19 +17,17 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static com.ibdev.bot.zara.storage.model.SubscriptionMode.AWAIT_RESTOCK;
 import static com.ibdev.bot.zara.util.Sizes.equalsSize;
 
 /**
- * The subscriptions domain state. The source of truth is Postgres (synchronous
- * writes, always "DB first, then indexes"); the in-memory maps are mere read
- * indexes. This is deliberately NOT a cache: losing an entry would mean
- * silently stopping the monitoring.
- *
  * @author i.bogatskii
  */
 @Log4j2
@@ -42,14 +42,25 @@ public class SubscriptionService {
     public record ProductRef(String link, String name) {
     }
 
+    /**
+     * One active size watch — what the monitoring tick iterates over.
+     */
+    public record Watch(long chatId, String size, SubscriptionMode mode) {
+    }
+
     private final ProductRepository productRepository;
     private final SubscriptionRepository subscriptionRepository;
 
-    private final Map<Long, Map<String, Set<String>>> byChat = new ConcurrentHashMap<>();
+    /**
+     * chatId → productKey → (size → mode). The size's mode lives in the hot path so the scheduler need not hit the DB.
+     */
+    private final Map<Long, Map<String, Map<String, SubscriptionMode>>> byChat = new ConcurrentHashMap<>();
     private final Map<String, Set<Long>> byProduct = new ConcurrentHashMap<>();
     private final Map<String, ProductRef> productRefs = new ConcurrentHashMap<>();
 
-    /** Rebuilds the indexes from the DB at startup (after the legacy data migration). */
+    /**
+     * Rebuilds the indexes from the DB at startup (after the legacy data migration).
+     */
     @Order(2)
     @EventListener(ApplicationReadyEvent.class)
     public void warmUp() {
@@ -72,12 +83,13 @@ public class SubscriptionService {
                 continue;
             }
 
+            final var mode = subscription.getMode() == null ? AWAIT_RESTOCK : subscription.getMode();
             index(
                     subscription.getChatId(),
                     subscription.getProductKey(),
                     product.getLink(),
                     product.getName(),
-                    Set.of(subscription.getSizeLabel())
+                    Map.of(subscription.getSizeLabel(), mode)
             );
         }
 
@@ -104,8 +116,58 @@ public class SubscriptionService {
             }
         }
 
-        index(chatId, productKey, card.getLink(), card.getName(), sizes);
+        final var sizeModes = new HashMap<String, SubscriptionMode>();
+        sizes.forEach(size -> sizeModes.put(size, AWAIT_RESTOCK));
+        index(chatId, productKey, card.getLink(), card.getName(), sizeModes);
         log.info("Chat {} subscribed to {} sizes {}", chatId, productKey, sizes);
+    }
+
+    /**
+     * The user confirmed "keep watching" after the size came back: switch the row to
+     * WATCH_IN_STOCK so the scheduler tracks its price and sells-out instead of restocks.
+     * Returns false if the subscription no longer exists (the link must be re-sent).
+     */
+    @Transactional
+    public boolean watchInStock(final long chatId, final String productKey, final String size) {
+        return setMode(chatId, productKey, size, SubscriptionMode.WATCH_IN_STOCK, true);
+    }
+
+    /**
+     * The user confirmed "keep waiting" after the size sold out: switch the row back to
+     * AWAIT_RESTOCK so the scheduler notifies again once it reappears.
+     */
+    @Transactional
+    public boolean awaitRestock(final long chatId, final String productKey, final String size) {
+        return setMode(chatId, productKey, size, AWAIT_RESTOCK, false);
+    }
+
+    private boolean setMode(
+            final long chatId,
+            final String productKey,
+            final String size,
+            final SubscriptionMode mode,
+            final boolean inStock
+    ) {
+        final var subscription = this.subscriptionRepository
+                .findByChatIdAndProductKeyAndSizeLabel(chatId, productKey, size);
+        if (subscription == null) {
+            return false;
+        }
+
+        if (!subscription.isActive()) {
+            subscription.reopen();
+        }
+        subscription.setMode(mode);
+        subscription.setLastKnownInStock(inStock);
+        subscription.setLastCheckedAt(Instant.now());
+        this.subscriptionRepository.save(subscription);
+
+        final var ref = findProductRef(productKey);
+        if (ref != null) {
+            index(chatId, productKey, ref.link(), ref.name(), Map.of(size, mode));
+        }
+        log.info("Chat {} set {} size {} to mode {}", chatId, productKey, size, mode);
+        return true;
     }
 
     @Transactional
@@ -134,7 +196,7 @@ public class SubscriptionService {
             return;
         }
 
-        subscribed.removeAll(sizes);
+        sizes.forEach(subscribed::remove);
         if (subscribed.isEmpty()) {
             perChat.remove(productKey);
             dropChatFromProduct(chatId, productKey);
@@ -180,7 +242,9 @@ public class SubscriptionService {
         this.subscriptionRepository.saveAll(active);
     }
 
-    /** The last persisted size availability — seeds the scheduler after a restart. */
+    /**
+     * The last persisted size availability — seeds the scheduler after a restart.
+     */
     public Map<String, Map<String, Boolean>> loadLastKnown() {
         final var result = new HashMap<String, Map<String, Boolean>>();
 
@@ -201,10 +265,24 @@ public class SubscriptionService {
             return Set.of();
         }
         final var sizes = perChat.get(productKey);
-        return sizes == null ? Set.of() : Set.copyOf(sizes);
+        return sizes == null ? Set.of() : Set.copyOf(sizes.keySet());
     }
 
-    /** Snapshot of the chat's subscriptions: productKey → sizes. */
+    /**
+     * The chat's tracked sizes for a product with their mode — lets the UI mark in-stock price watches.
+     */
+    public Map<String, SubscriptionMode> getSubscribedSizeModes(final long chatId, final String productKey) {
+        final var perChat = this.byChat.get(chatId);
+        if (perChat == null) {
+            return Map.of();
+        }
+        final var sizeModes = perChat.get(productKey);
+        return sizeModes == null ? Map.of() : Map.copyOf(sizeModes);
+    }
+
+    /**
+     * Snapshot of the chat's subscriptions: productKey → sizes.
+     */
     public Map<String, Set<String>> getAllSubscribedSizes(final long chatId) {
         final var perChat = this.byChat.get(chatId);
         if (perChat == null) {
@@ -214,13 +292,15 @@ public class SubscriptionService {
         final var snapshot = new HashMap<String, Set<String>>();
         perChat.forEach((productKey, sizes) -> {
             if (!sizes.isEmpty()) {
-                snapshot.put(productKey, Set.copyOf(sizes));
+                snapshot.put(productKey, Set.copyOf(sizes.keySet()));
             }
         });
         return snapshot;
     }
 
-    /** Every product with at least one subscription — the scheduler's unit of work. */
+    /**
+     * Every product with at least one subscription — the scheduler's unit of work.
+     */
     public Set<String> activeProductKeys() {
         return Set.copyOf(this.byProduct.keySet());
     }
@@ -244,7 +324,9 @@ public class SubscriptionService {
                 .orElse(null);
     }
 
-    /** Snapshot of the product's subscribers: chatId → sizes. The reverse index that deduplicates scrapes. */
+    /**
+     * Snapshot of the product's subscribers: chatId → sizes. The reverse index that deduplicates scrapes.
+     */
     public Map<Long, Set<String>> getSubscribersByProduct(final String productKey) {
         final var chats = this.byProduct.get(productKey);
         if (chats == null) {
@@ -259,6 +341,66 @@ public class SubscriptionService {
             }
         }
         return snapshot;
+    }
+
+    /**
+     * Flat list of every active (chatId, size, mode) watch on the product — the scheduler's unit of work.
+     */
+    public List<Watch> getActiveWatches(final String productKey) {
+        final var chats = this.byProduct.get(productKey);
+        if (chats == null) {
+            return List.of();
+        }
+
+        final var watches = new ArrayList<Watch>();
+        for (final var chatId : chats) {
+            final var perChat = this.byChat.get(chatId);
+            if (perChat == null) {
+                continue;
+            }
+            final var sizeModes = perChat.get(productKey);
+            if (sizeModes == null) {
+                continue;
+            }
+            sizeModes.forEach((size, mode) -> watches.add(new Watch(chatId, size, mode)));
+        }
+        return watches;
+    }
+
+    /**
+     * Persists the last scraped price on the product row — the monitor's restart-safe price baseline.
+     */
+    @Transactional
+    public void recordPrice(final String productKey, final PriceInfo price) {
+        if (price == null) {
+            return;
+        }
+        this.productRepository.findById(productKey).ifPresent(product -> {
+            product.setLastPriceAmount(price.amount());
+            product.setLastPriceCurrency(price.currency());
+            product.setLastPriceFractionDigits(price.fractionDigits());
+            this.productRepository.save(product);
+        });
+    }
+
+    /**
+     * The last persisted price per actively-monitored product — seeds the scheduler after a restart.
+     */
+    public Map<String, PriceInfo> loadLastKnownPrices() {
+        final var keys = this.subscriptionRepository.findByClosedAtIsNull().stream()
+                .map(Subscription::getProductKey).distinct().toList();
+
+        final var result = new HashMap<String, PriceInfo>();
+        this.productRepository.findAllById(keys).forEach(product -> {
+            if (product.getLastPriceAmount() != null && product.getLastPriceFractionDigits() != null) {
+                result.put(product.getProductKey(), new PriceInfo(
+                        product.getLastPriceAmount(),
+                        product.getLastPriceCurrency(),
+                        product.getLastPriceFractionDigits()
+                ));
+            }
+        });
+        return result;
     }
 
     private void upsertProduct(final String productKey, final String name, final String link) {
@@ -285,11 +427,11 @@ public class SubscriptionService {
             final String productKey,
             final String link,
             final String name,
-            final Set<String> sizes
+            final Map<String, SubscriptionMode> sizeModes
     ) {
         this.byChat.computeIfAbsent(chatId, k -> new ConcurrentHashMap<>())
-                .computeIfAbsent(productKey, k -> ConcurrentHashMap.newKeySet())
-                .addAll(sizes);
+                .computeIfAbsent(productKey, k -> new ConcurrentHashMap<>())
+                .putAll(sizeModes);
         this.byProduct.computeIfAbsent(productKey, k -> ConcurrentHashMap.newKeySet()).add(chatId);
         this.productRefs.put(productKey, new ProductRef(link, name));
     }

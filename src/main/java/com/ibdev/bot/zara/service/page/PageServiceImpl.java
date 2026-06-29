@@ -6,12 +6,11 @@ import com.ibdev.bot.zara.config.ZaraProperties;
 import com.ibdev.bot.zara.client.ZaraParsingException;
 import com.ibdev.bot.zara.client.WebDriverFactory;
 import com.ibdev.bot.zara.client.ProductCard;
+import com.ibdev.bot.zara.client.ProductSnapshot;
 import com.ibdev.bot.zara.notify.AdminNotifier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Service;
-
-import java.util.Map;
 
 /**
  * Every method: the lightweight JSON API first (~0.5 s), on any problem —
@@ -59,11 +58,11 @@ public class PageServiceImpl implements PageService {
     }
 
     @Override
-    public Map<String, Boolean> checkProductSizesAvailability(final String link) {
+    public ProductSnapshot checkProductSizesAvailability(final String link) {
         if (this.properties.getApi().isEnabled()) {
             try {
                 final var viaApi = this.zaraApiClient.checkSizesAvailability(link);
-                if (viaApi != null && !viaApi.isEmpty()) {
+                if (viaApi != null && viaApi.sizes() != null && !viaApi.sizes().isEmpty()) {
                     return viaApi;
                 }
                 log.info("Zara API gave no data for {}, falling back to Selenium.", link);

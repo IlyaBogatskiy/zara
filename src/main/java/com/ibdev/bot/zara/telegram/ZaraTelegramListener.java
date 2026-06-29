@@ -5,6 +5,7 @@ import com.ibdev.bot.zara.client.ProductCard;
 import com.ibdev.bot.zara.client.SizeInfo;
 import com.ibdev.bot.zara.notify.UserNotifier;
 import com.ibdev.bot.zara.service.subscription.SubscriptionService;
+import com.ibdev.bot.zara.storage.model.SubscriptionMode;
 import com.pengrad.telegrambot.TelegramBot;
 import com.pengrad.telegrambot.UpdatesListener;
 import com.pengrad.telegrambot.model.CallbackQuery;
@@ -26,6 +27,7 @@ import java.util.stream.Collectors;
 
 import static com.ibdev.bot.zara.client.ClothingSizes.WHOLE;
 import static com.ibdev.bot.zara.storage.model.SubscriptionChangeReason.USER_ACTION;
+import static com.ibdev.bot.zara.storage.model.SubscriptionMode.WATCH_IN_STOCK;
 import static com.ibdev.bot.zara.util.ProductLinks.extractProductId;
 
 /**
@@ -199,7 +201,7 @@ public class ZaraTelegramListener {
             editText(
                     chatId,
                     messageId,
-                    formatSubscriptionsList(subs),
+                    formatSubscriptionsList(chatId, subs),
                     subscriptionsListKeyboard(session, subs)
             );
 
@@ -242,7 +244,7 @@ public class ZaraTelegramListener {
             editText(
                     chatId,
                     messageId,
-                    formatSubscriptionsList(subs),
+                    formatSubscriptionsList(chatId, subs),
                     subscriptionsListKeyboard(session, subs)
             );
 
@@ -268,6 +270,21 @@ public class ZaraTelegramListener {
             final var productKey = data.substring(UserNotifier.CB_WHOLE_KEEP_PREFIX.length());
             editText(chatId, messageId, "⏳ Проверяю отсутствующие размеры...", null);
             this.scrapingExecutor.execute(() -> keepMonitoringMissingSizes(chatId, productKey));
+            return;
+        }
+
+        if (data != null && data.startsWith(UserNotifier.CB_SIZE_WATCH_PREFIX)) {
+            handleSizeDecision(chatId, messageId, data, UserNotifier.CB_SIZE_WATCH_PREFIX);
+            return;
+        }
+
+        if (data != null && data.startsWith(UserNotifier.CB_SIZE_AWAIT_PREFIX)) {
+            handleSizeDecision(chatId, messageId, data, UserNotifier.CB_SIZE_AWAIT_PREFIX);
+            return;
+        }
+
+        if (data != null && data.startsWith(UserNotifier.CB_SIZE_STOP_PREFIX)) {
+            handleSizeDecision(chatId, messageId, data, UserNotifier.CB_SIZE_STOP_PREFIX);
             return;
         }
 
@@ -466,6 +483,47 @@ public class ZaraTelegramListener {
         }
     }
 
+    /**
+     * Handles the Yes/No buttons attached to "size appeared" / "size sold out"
+     * notifications. Payload after the prefix is "productKey:size".
+     */
+    private void handleSizeDecision(final long chatId, final int messageId, final String data, final String prefix) {
+        final var payload = data.substring(prefix.length());
+        final var idx = payload.indexOf(':');
+        if (idx <= 0 || idx == payload.length() - 1) {
+            editText(chatId, messageId, "Контекст устарел. Откройте товар заново.", null);
+            return;
+        }
+        final var productKey = payload.substring(0, idx);
+        final var size = payload.substring(idx + 1);
+
+        switch (prefix) {
+            case UserNotifier.CB_SIZE_WATCH_PREFIX -> {
+                if (this.subscriptionService.watchInStock(chatId, productKey, size)) {
+                    editText(chatId, messageId,
+                            "✅ Хорошо! Слежу за размером " + size + ": сообщу, если изменится цена "
+                                    + "или размер снова пропадёт.", null);
+                } else {
+                    editText(chatId, messageId,
+                            "Не нашёл эту подписку. Пришлите ссылку на товар заново.", null);
+                }
+            }
+            case UserNotifier.CB_SIZE_AWAIT_PREFIX -> {
+                if (this.subscriptionService.awaitRestock(chatId, productKey, size)) {
+                    editText(chatId, messageId,
+                            "✅ Хорошо! Буду ждать появления размера " + size + " и сообщу.", null);
+                } else {
+                    editText(chatId, messageId,
+                            "Не нашёл эту подписку. Пришлите ссылку на товар заново.", null);
+                }
+            }
+            default -> {
+                this.subscriptionService.unsubscribe(chatId, productKey, Set.of(size), USER_ACTION);
+                editText(chatId, messageId, "Ок, больше не слежу за размером " + size + ".", null);
+            }
+        }
+    }
+
     private void openSubscriptionsMenu(long chatId) {
         final var session = this.sessionCache.getOrCreate(chatId);
 
@@ -479,22 +537,38 @@ public class ZaraTelegramListener {
 
         send(
                 chatId,
-                formatSubscriptionsList(subs),
+                formatSubscriptionsList(chatId, subs),
                 subscriptionsListKeyboard(session, subs)
         );
     }
 
-    private String formatSubscriptionsList(final Map<String, Set<String>> subs) {
+    private String formatSubscriptionsList(final long chatId, final Map<String, Set<String>> subs) {
         final var sb = new StringBuilder("📌 Ваши подписки:\n\n");
 
+        var anyWatched = false;
         int i = 1;
         for (final var entry : subs.entrySet()) {
+            final var modes = this.subscriptionService.getSubscribedSizeModes(chatId, entry.getKey());
+            anyWatched |= modes.containsValue(WATCH_IN_STOCK);
             sb.append(i++).append(") ").append(productTitle(entry.getKey())).append("\n");
-            sb.append("   • размеры: ").append(entry.getValue()).append("\n\n");
+            sb.append("   • размеры: ").append(sizesWithMarkers(entry.getValue(), modes)).append("\n\n");
         }
 
+        if (anyWatched) {
+            sb.append("💰 — слежу за ценой (размер уже в наличии)\n\n");
+        }
         sb.append("Выберите подписку, чтобы управлять ею.");
         return sb.toString();
+    }
+
+    /**
+     * Renders sizes as "[S 💰, M]", flagging the ones being watched in stock for price changes.
+     */
+    private String sizesWithMarkers(final Set<String> sizes, final Map<String, SubscriptionMode> modes) {
+        return sizes.stream()
+                .sorted()
+                .map(s -> normalizeSize(s) + (modes.get(s) == WATCH_IN_STOCK ? " 💰" : ""))
+                .collect(Collectors.joining(", ", "[", "]"));
     }
 
     private InlineKeyboardMarkup subscriptionsListKeyboard(
@@ -529,12 +603,17 @@ public class ZaraTelegramListener {
         }
 
         final var ref = this.subscriptionService.getProductRef(productKey);
+        final var modes = this.subscriptionService.getSubscribedSizeModes(chatId, productKey);
 
         final var sb = new StringBuilder();
         sb.append("🧾 ").append(productTitle(productKey)).append("\n");
         if (ref != null && ref.link() != null) sb.append(ref.link()).append("\n");
         sb.append("\n📌 Отслеживаемые размеры:\n");
-        sizes.forEach(s -> sb.append("• ").append(normalizeSize(s)).append("\n"));
+        sizes.forEach(s -> sb.append("• ").append(normalizeSize(s))
+                .append(modes.get(s) == WATCH_IN_STOCK ? " 💰" : "").append("\n"));
+        if (modes.containsValue(WATCH_IN_STOCK)) {
+            sb.append("\n💰 — слежу за ценой (размер уже в наличии)");
+        }
         sb.append("\nНажмите на размер, чтобы отменить отслеживание.");
 
         session.setCurrentSubProductKey(productKey);
@@ -542,7 +621,7 @@ public class ZaraTelegramListener {
                 chatId,
                 messageId,
                 sb.toString(),
-                subscriptionDetailsKeyboard(session, productKey, sizes)
+                subscriptionDetailsKeyboard(session, productKey, sizes, modes)
         );
     }
 
@@ -551,12 +630,14 @@ public class ZaraTelegramListener {
         return (ref != null && ref.name() != null) ? ref.name() : productKey;
     }
 
-    private InlineKeyboardMarkup subscriptionDetailsKeyboard(ChatSession session, String productKey, Set<String> sizes) {
+    private InlineKeyboardMarkup subscriptionDetailsKeyboard(
+            ChatSession session, String productKey, Set<String> sizes, Map<String, SubscriptionMode> modes) {
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup();
 
         List<InlineKeyboardButton> row = new ArrayList<>(3);
         for (String size : sizes.stream().sorted().toList()) {
-            row.add(new InlineKeyboardButton(normalizeSize(size)).callbackData(CB_SUB_TOGGLE_PREFIX + normalizeSize(size)));
+            final var label = normalizeSize(size) + (modes.get(size) == WATCH_IN_STOCK ? " 💰" : "");
+            row.add(new InlineKeyboardButton(label).callbackData(CB_SUB_TOGGLE_PREFIX + normalizeSize(size)));
             if (row.size() == 3) {
                 kb.addRow(row.toArray(new InlineKeyboardButton[0]));
                 row.clear();
@@ -662,7 +743,11 @@ public class ZaraTelegramListener {
     private String formatCard(ProductCard card) {
         StringBuilder sb = new StringBuilder();
         sb.append("🧾 ").append(card.getName()).append("\n");
-        sb.append(card.getLink()).append("\n\n");
+        sb.append(card.getLink()).append("\n");
+        if (card.getPrice() != null) {
+            sb.append("💶 Цена: ").append(card.getPrice().formatted()).append("\n");
+        }
+        sb.append("\n");
 
         List<SizeInfo> sizes = card.getSizeDetails();
         if (sizes == null || sizes.isEmpty()) {

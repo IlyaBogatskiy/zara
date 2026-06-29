@@ -18,12 +18,6 @@ import static com.ibdev.bot.zara.client.ClothingSizes.WHOLE;
 import static com.ibdev.bot.zara.util.Sizes.equalsSize;
 
 /**
- * Canary for CSS selector breakage. The treacherous part of the Selenium path:
- * a broken selector used to look exactly like "everything is out of stock" and
- * notifications simply stopped coming. The canary periodically runs Selenium
- * parsing on a live monitored product and cross-checks the result against an
- * independent source — the JSON API. A mismatch or a parse failure = operator alert.
- *
  * @author i.bogatskii
  */
 @Log4j2
@@ -72,7 +66,8 @@ public class SelectorCanary {
 
         final Map<String, Boolean> viaApi;
         try {
-            viaApi = this.zaraApiClient.checkSizesAvailability(ref.link());
+            final var apiSnapshot = this.zaraApiClient.checkSizesAvailability(ref.link());
+            viaApi = apiSnapshot == null ? null : apiSnapshot.sizes();
         } catch (final Exception e) {
             log.info("Canary: API unavailable ({}), but Selenium parsing works — OK.", e.getMessage());
             return;
@@ -98,7 +93,7 @@ public class SelectorCanary {
         final var driver = this.webDriverFactory.create();
         final var wait = this.webDriverFactory.createWait(driver);
         try {
-            return new ZaraPageClient(driver, wait).checkSizesAvailability(link);
+            return new ZaraPageClient(driver, wait).checkSizesAvailability(link).sizes();
         } finally {
             driver.quit();
         }

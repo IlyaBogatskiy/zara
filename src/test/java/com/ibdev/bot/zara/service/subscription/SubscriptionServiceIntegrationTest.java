@@ -12,16 +12,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import com.ibdev.bot.zara.client.PriceInfo;
+import com.ibdev.bot.zara.storage.model.SubscriptionMode;
+
 import static com.ibdev.bot.zara.storage.model.SubscriptionChangeReason.AUTO_AVAILABLE;
 import static com.ibdev.bot.zara.storage.model.SubscriptionChangeReason.USER_ACTION;
+import static com.ibdev.bot.zara.storage.model.SubscriptionMode.AWAIT_RESTOCK;
+import static com.ibdev.bot.zara.storage.model.SubscriptionMode.WATCH_IN_STOCK;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Integration test of the subscription lifecycle on in-memory H2:
- * no Postgres, network or Chrome — runs in any environment.
- * Every test uses its own chatIds/productKeys: the service's in-memory indexes
- * outlive the per-test transaction.
- *
  * @author i.bogatskii
  */
 @DataJpaTest(
@@ -50,7 +50,8 @@ class SubscriptionServiceIntegrationTest {
                 productKey,
                 "Test product " + productKey,
                 "https://www.zara.com/me/en/test-p" + productKey + ".html?v1=1",
-                List.of()
+                List.of(),
+                null
         );
     }
 
@@ -177,6 +178,62 @@ class SubscriptionServiceIntegrationTest {
         assertThat(restarted.activeProductKeys()).contains("p110");
         assertThat(restarted.getProductRef("p110").link()).contains("p110");
         assertThat(restarted.loadLastKnown()).containsEntry("p110", Map.of("S", true, "M", false));
+    }
+
+    @Test
+    void watchInStockSwitchesModeAndShowsUpInActiveWatches() {
+        subscriptionService.subscribe(120L, card("p120"), Set.of("S"));
+
+        final var switched = subscriptionService.watchInStock(120L, "p120", "S");
+        assertThat(switched).isTrue();
+
+        final var row = subscriptionRepository.findByChatIdAndProductKeyAndSizeLabel(120L, "p120", "S");
+        assertThat(row.getMode()).isEqualTo(WATCH_IN_STOCK);
+        assertThat(row.getLastKnownInStock()).isTrue();
+
+        assertThat(subscriptionService.getActiveWatches("p120"))
+                .containsExactly(new SubscriptionService.Watch(120L, "S", WATCH_IN_STOCK));
+    }
+
+    @Test
+    void awaitRestockSwitchesModeBack() {
+        subscriptionService.subscribe(121L, card("p121"), Set.of("M"));
+        subscriptionService.watchInStock(121L, "p121", "M");
+
+        final var switched = subscriptionService.awaitRestock(121L, "p121", "M");
+        assertThat(switched).isTrue();
+
+        final var row = subscriptionRepository.findByChatIdAndProductKeyAndSizeLabel(121L, "p121", "M");
+        assertThat(row.getMode()).isEqualTo(AWAIT_RESTOCK);
+        assertThat(row.getLastKnownInStock()).isFalse();
+    }
+
+    @Test
+    void watchInStockReturnsFalseForUnknownSubscription() {
+        assertThat(subscriptionService.watchInStock(122L, "p122", "S")).isFalse();
+    }
+
+    @Test
+    void recordPricePersistsAndReloadsBaseline() {
+        subscriptionService.subscribe(123L, card("p123"), Set.of("S"));
+
+        subscriptionService.recordPrice("p123", new PriceInfo(1797, "EUR", 2));
+
+        final var product = productRepository.findById("p123").orElseThrow();
+        assertThat(product.getLastPriceAmount()).isEqualTo(1797);
+        assertThat(product.getLastPriceCurrency()).isEqualTo("EUR");
+        assertThat(product.getLastPriceFractionDigits()).isEqualTo(2);
+
+        assertThat(subscriptionService.loadLastKnownPrices())
+                .containsEntry("p123", new PriceInfo(1797, "EUR", 2));
+    }
+
+    @Test
+    void newSubscriptionDefaultsToAwaitRestock() {
+        subscriptionService.subscribe(124L, card("p124"), Set.of("S"));
+
+        assertThat(subscriptionService.getActiveWatches("p124"))
+                .containsExactly(new SubscriptionService.Watch(124L, "S", SubscriptionMode.AWAIT_RESTOCK));
     }
 
     @Test

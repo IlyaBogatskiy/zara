@@ -4,6 +4,7 @@ import com.ibdev.bot.zara.cache.ProductCardCache;
 import com.ibdev.bot.zara.scheduler.MonitoringScheduler;
 import com.ibdev.bot.zara.scheduler.SelectorCanary;
 import com.ibdev.bot.zara.client.ProductCard;
+import com.ibdev.bot.zara.client.ProductSnapshot;
 import com.ibdev.bot.zara.service.page.PageService;
 import com.ibdev.bot.zara.service.subscription.SubscriptionService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -45,9 +46,9 @@ public class OperatorController {
     public record UnsubscribeRequest(long chatId, String productKey, Set<String> sizes) {
     }
 
-    @Operation(summary = "Живая проверка наличия размеров по ссылке (JSON API → Selenium-фоллбек)")
+    @Operation(summary = "Живая проверка наличия размеров и цены по ссылке (JSON API → Selenium-фоллбек)")
     @GetMapping("/availability")
-    public Map<String, Boolean> availability(@RequestParam final String link) {
+    public ProductSnapshot availability(@RequestParam final String link) {
         return this.pageService.checkProductSizesAvailability(link);
     }
 
