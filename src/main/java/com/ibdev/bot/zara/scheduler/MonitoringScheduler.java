@@ -1,6 +1,8 @@
 package com.ibdev.bot.zara.scheduler;
 
 import com.ibdev.bot.zara.client.PriceInfo;
+import com.ibdev.bot.zara.config.ZaraProperties;
+import com.ibdev.bot.zara.notify.NotifyEvent;
 import com.ibdev.bot.zara.notify.UserNotifier;
 import com.ibdev.bot.zara.service.page.PageService;
 import com.ibdev.bot.zara.service.subscription.SubscriptionService;
@@ -13,7 +15,11 @@ import org.springframework.core.annotation.Order;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -36,19 +42,39 @@ public class MonitoringScheduler {
     private final SubscriptionService subscriptionService;
     private final PageService pageService;
     private final UserNotifier userNotifier;
+    private final ZaraProperties properties;
 
     /**
-     * Last known size availability: productKey → (size → inStock).
+     * Last <em>confirmed</em> size availability: productKey → (size → inStock).
      * Private monitor state; persisted onto subscription rows after every check
      * (recordCheck) and restored from there after a restart.
-     * A missing key/size is treated as "was not in stock".
+     * A missing key/size is treated as "was not in stock". This holds the debounced state,
+     * not the raw last observation (see {@link #pendingFlips}).
      */
     private final Map<String, Map<String, Boolean>> lastKnown = new ConcurrentHashMap<>();
+
+    /**
+     * Debounce buffer: productKey → (size → a raw observation that disagrees with {@link #lastKnown}
+     * and how many consecutive times it has been seen). A change is committed only once it has been
+     * observed {@code zara.monitor.confirmations} times in a row — this filters CDN/edge-cache blips
+     * and "low stock sold in seconds" flaps. In-memory only; a restart just re-accumulates.
+     */
+    private final Map<String, Map<String, Pending>> pendingFlips = new ConcurrentHashMap<>();
 
     /**
      * Last known price per product — the price-change baseline, persisted on the product row.
      */
     private final Map<String, PriceInfo> lastKnownPrice = new ConcurrentHashMap<>();
+
+    private static final class Pending {
+        private final boolean value;
+        private int count;
+
+        private Pending(final boolean value) {
+            this.value = value;
+            this.count = 1;
+        }
+    }
 
     /**
      * Resumes monitoring from the state we stopped at before the restart.
@@ -74,28 +100,43 @@ public class MonitoringScheduler {
         final var productKeys = this.subscriptionService.activeProductKeys();
         this.lastKnown.keySet().retainAll(productKeys);
         this.lastKnownPrice.keySet().retainAll(productKeys);
+        this.pendingFlips.keySet().retainAll(productKeys);
         if (productKeys.isEmpty()) {
             log.info("No subscriptions found, nothing to monitor.");
             return;
         }
 
         final var startedAt = System.currentTimeMillis();
+        // Accumulate every chat's changes across all products, then send one report per chat —
+        // a burst of simultaneous changes becomes one message instead of many (fewer dropped by
+        // Telegram rate limits). Insertion order preserves product/event ordering within a report.
+        final var reports = new LinkedHashMap<Long, List<NotifyEvent>>();
         for (final var productKey : productKeys) {
             try {
-                monitorProduct(productKey);
+                monitorProduct(productKey, reports);
             } catch (final Exception e) {
                 log.error("Monitoring failed for productKey {}: {}", productKey, e.getMessage(), e);
             }
         }
 
-        log.info("Monitoring tick finished: {} product(s) in {} ms.",
-                productKeys.size(), System.currentTimeMillis() - startedAt);
+        for (final var entry : reports.entrySet()) {
+            try {
+                this.userNotifier.sendReport(entry.getKey(), entry.getValue());
+            } catch (final Exception e) {
+                log.error("Failed to send report to chat {}: {}", entry.getKey(), e.getMessage(), e);
+            }
+        }
+
+        log.info("Monitoring tick finished: {} product(s), {} chat report(s) in {} ms.",
+                productKeys.size(), reports.size(), System.currentTimeMillis() - startedAt);
     }
 
     /**
-     * One scrape per product per tick — regardless of how many chats subscribed.
+     * One scrape per product per tick — regardless of how many chats subscribed. Changes are
+     * appended to {@code reports} (chatId → events) rather than sent immediately; the caller flushes
+     * one consolidated report per chat after the whole tick.
      */
-    private void monitorProduct(final String productKey) {
+    private void monitorProduct(final String productKey, final Map<Long, List<NotifyEvent>> reports) {
         final var ref = this.subscriptionService.getProductRef(productKey);
         if (ref == null) {
             log.warn("No product ref for productKey {}, skipping.", productKey);
@@ -108,20 +149,37 @@ public class MonitoringScheduler {
             return;
         }
 
-        final var current = snapshot.sizes();
+        final var raw = snapshot.sizes();
         final var price = snapshot.price();
         final var previous = this.lastKnown.getOrDefault(productKey, Map.of());
         final var watches = this.subscriptionService.getActiveWatches(productKey);
 
-        notifyPriceChangeIfMoved(productKey, ref, price, watches);
+        // Debounce: fold the raw observation into the confirmed state, requiring N consecutive
+        // agreeing observations before a change commits. `appeared` = sizes that just flipped OOS→in.
+        final var appeared = new LinkedHashSet<String>();
+        final var current = debounce(productKey, previous, raw, appeared);
+
+        // A just-committed restock can still be a stale-API lie (the product's real page shows
+        // "unavailable"). Cross-check the watched sizes against the Selenium/DOM path; on a definitive
+        // contradiction revert the flip so no false "appeared" goes out. On a Selenium error we trust
+        // the API. Only watched sizes are confirmed — an unwatched size flip notifies no one.
+        final var watchedSizes = new HashSet<String>();
+        for (final var watch : watches) {
+            watchedSizes.add(watch.size());
+        }
+        confirmRestockViaSelenium(ref.link(), appeared, current, watchedSizes);
+
+        collectPriceChangeIfMoved(productKey, ref, price, watches, reports);
 
         for (final var watch : watches) {
             if (WHOLE.getSize().equals(watch.size())) {
-                notifyWholeProductIfAvailable(watch.chatId(), productKey, ref, current);
+                collectWholeProductIfAvailable(watch.chatId(), productKey, ref, current, reports);
             } else if (watch.mode() == WATCH_IN_STOCK) {
-                notifySizeSoldOut(watch.chatId(), productKey, ref, watch.size(), previous, current);
+                collectSizeSoldOut(watch.chatId(), productKey, ref, watch.size(), previous, current, reports);
             } else {
-                notifySizeIfAppeared(watch.chatId(), productKey, ref, watch.size(), previous, current);
+                collectSizeIfAppeared(
+                        watch.chatId(), productKey, ref, watch.size(), previous, current,
+                        snapshot.lowStockSizes(), reports);
             }
         }
 
@@ -135,13 +193,118 @@ public class MonitoringScheduler {
     }
 
     /**
-     * Notifies every chat watching an in-stock size on this product when the price moved.
+     * Applies the confirmation debounce: returns the new confirmed state, and fills {@code appeared}
+     * with the sizes whose confirmed availability flips OOS→in-stock this tick. Comparison against the
+     * previous confirmed state is fuzzy ("EU40" == "40") because a restart seeds it from subscribed
+     * labels, which may differ from the scrape's raw labels.
      */
-    private void notifyPriceChangeIfMoved(
+    private Map<String, Boolean> debounce(
+            final String productKey,
+            final Map<String, Boolean> previousConfirmed,
+            final Map<String, Boolean> raw,
+            final Set<String> appeared
+    ) {
+        final var need = Math.max(1, this.properties.getMonitor().getConfirmations());
+        final var pending = this.pendingFlips.computeIfAbsent(productKey, k -> new HashMap<>());
+        pending.keySet().retainAll(raw.keySet());
+
+        final var confirmed = new LinkedHashMap<String, Boolean>(raw.size());
+        for (final var entry : raw.entrySet()) {
+            final var size = entry.getKey();
+            final var rawValue = TRUE.equals(entry.getValue());
+            final var confirmedValue = availability(previousConfirmed, size);
+
+            if (rawValue == confirmedValue) {
+                pending.remove(size);
+                confirmed.put(size, confirmedValue);
+                continue;
+            }
+
+            var flip = pending.get(size);
+            if (flip == null || flip.value != rawValue) {
+                flip = new Pending(rawValue);
+                pending.put(size, flip);
+            } else {
+                flip.count++;
+            }
+
+            if (flip.count >= need) {
+                pending.remove(size);
+                confirmed.put(size, rawValue);
+                if (rawValue) {
+                    appeared.add(size);
+                }
+            } else {
+                confirmed.put(size, confirmedValue);
+            }
+        }
+        return confirmed;
+    }
+
+    /**
+     * For every size that just flipped to in-stock, cross-check with the Selenium/DOM path. If it
+     * definitively says the size/product is NOT available, revert the flip in {@code confirmed} and
+     * drop it from {@code appeared} so no notification fires. Skipped when the API path is disabled
+     * (the primary reading was already Selenium) or the config toggle is off. Runs at most one
+     * Selenium scrape per product, and only on the rare tick when something restocked.
+     */
+    private void confirmRestockViaSelenium(
+            final String link,
+            final Set<String> appeared,
+            final Map<String, Boolean> confirmed,
+            final Set<String> watchedSizes
+    ) {
+        if (!this.properties.getMonitor().isConfirmRestockViaSelenium()
+                || !this.properties.getApi().isEnabled()) {
+            return;
+        }
+
+        final var toConfirm = new ArrayList<String>();
+        for (final var size : appeared) {
+            if (containsSize(watchedSizes, size)) {
+                toConfirm.add(size);
+            }
+        }
+        if (toConfirm.isEmpty()) {
+            return;
+        }
+
+        final Map<String, Boolean> viaSelenium;
+        try {
+            final var seleniumSnapshot = this.pageService.checkViaSelenium(link);
+            viaSelenium = (seleniumSnapshot == null) ? null : seleniumSnapshot.sizes();
+        } catch (final Exception e) {
+            log.warn("Selenium restock confirmation failed for {} ({}) — trusting the API result.",
+                    link, e.getMessage());
+            return;
+        }
+        if (viaSelenium == null) {
+            return;
+        }
+
+        for (final var size : toConfirm) {
+            if (!availability(viaSelenium, size)) {
+                confirmed.put(size, false);
+                appeared.remove(size);
+                log.info("Restock of size '{}' on {} not confirmed by Selenium — suppressing notification.",
+                        size, link);
+            }
+        }
+    }
+
+    private void add(final Map<Long, List<NotifyEvent>> reports, final long chatId, final NotifyEvent event) {
+        reports.computeIfAbsent(chatId, id -> new ArrayList<>()).add(event);
+    }
+
+    /**
+     * Collects a price-change event for every chat watching an in-stock size on this product.
+     */
+    private void collectPriceChangeIfMoved(
             final String productKey,
             final SubscriptionService.ProductRef ref,
             final PriceInfo price,
-            final List<Watch> watches
+            final List<Watch> watches,
+            final Map<Long, List<NotifyEvent>> reports
     ) {
         if (price == null) {
             return;
@@ -159,47 +322,68 @@ public class MonitoringScheduler {
             }
         }
         for (final var chatId : chats) {
-            this.userNotifier.priceChanged(chatId, ref, previousPrice, price);
+            add(reports, chatId, new NotifyEvent.PriceMoved(
+                    productKey, ref.name(), ref.link(), previousPrice, price));
         }
     }
 
     /**
-     * AWAIT_RESTOCK: the out-of-stock size came back — ask whether to keep watching it.
+     * AWAIT_RESTOCK: the out-of-stock size came back — offer to keep watching it.
      */
-    private void notifySizeIfAppeared(
+    private void collectSizeIfAppeared(
             final long chatId,
             final String productKey,
             final SubscriptionService.ProductRef ref,
             final String size,
             final Map<String, Boolean> previous,
-            final Map<String, Boolean> current
+            final Map<String, Boolean> current,
+            final Set<String> lowStockSizes,
+            final Map<Long, List<NotifyEvent>> reports
     ) {
         if (!availability(previous, size) && availability(current, size)) {
-            this.userNotifier.sizeAppeared(chatId, productKey, size, ref.name());
+            final var lowStock = containsSize(lowStockSizes, size);
+            add(reports, chatId, new NotifyEvent.SizeAppeared(productKey, ref.name(), ref.link(), size, lowStock));
         }
     }
 
     /**
-     * WATCH_IN_STOCK: the in-stock size sold out — ask whether to keep waiting for it.
+     * Fuzzy membership test ("EU40" matches a subscription for "40").
      */
-    private void notifySizeSoldOut(
+    private boolean containsSize(final Set<String> sizes, final String size) {
+        if (sizes == null) {
+            return false;
+        }
+        for (final var candidate : sizes) {
+            if (equalsSize(candidate, size)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * WATCH_IN_STOCK: the in-stock size sold out — offer to keep waiting for it.
+     */
+    private void collectSizeSoldOut(
             final long chatId,
             final String productKey,
             final SubscriptionService.ProductRef ref,
             final String size,
             final Map<String, Boolean> previous,
-            final Map<String, Boolean> current
+            final Map<String, Boolean> current,
+            final Map<Long, List<NotifyEvent>> reports
     ) {
         if (availability(previous, size) && !availability(current, size)) {
-            this.userNotifier.sizeDisappeared(chatId, productKey, size, ref.name());
+            add(reports, chatId, new NotifyEvent.SizeSoldOut(productKey, ref.name(), ref.link(), size));
         }
     }
 
-    private void notifyWholeProductIfAvailable(
+    private void collectWholeProductIfAvailable(
             final long chatId,
             final String productKey,
             final SubscriptionService.ProductRef ref,
-            final Map<String, Boolean> current
+            final Map<String, Boolean> current,
+            final Map<Long, List<NotifyEvent>> reports
     ) {
         if (!TRUE.equals(current.get(WHOLE.getSize()))) {
             return;
@@ -218,7 +402,8 @@ public class MonitoringScheduler {
             }
         }
 
-        this.userNotifier.wholeProductAvailable(chatId, productKey, ref, availableSizes, unavailableSizes);
+        add(reports, chatId, new NotifyEvent.WholeAvailable(
+                productKey, ref.name(), ref.link(), availableSizes, unavailableSizes));
 
         this.subscriptionService.unsubscribe(chatId, productKey, Set.of(WHOLE.getSize()), AUTO_AVAILABLE);
     }

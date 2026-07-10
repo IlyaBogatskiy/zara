@@ -11,4 +11,6 @@ public interface PageService {
     ProductCard loadProductCard(String link);
 
     ProductSnapshot checkProductSizesAvailability(String link);
+
+    ProductSnapshot checkViaSelenium(String link);
 }

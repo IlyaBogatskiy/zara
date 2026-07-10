@@ -8,6 +8,8 @@ import com.ibdev.bot.zara.service.subscription.SubscriptionService;
 import com.pengrad.telegrambot.TelegramBot;
 import com.pengrad.telegrambot.UpdatesListener;
 import com.pengrad.telegrambot.model.Update;
+import com.pengrad.telegrambot.model.request.InlineKeyboardButton;
+import com.pengrad.telegrambot.model.request.InlineKeyboardMarkup;
 import com.pengrad.telegrambot.request.BaseRequest;
 import com.pengrad.telegrambot.request.SendMessage;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +21,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -210,6 +213,34 @@ class ZaraTelegramListenerTest {
         sendCallback("SIZE_WATCH:" + KEY + ":S");
 
         assertThat(textOf(requests(1).getFirst())).contains("Не нашёл эту подписку");
+    }
+
+    @Test
+    void filterOutButtonsDropsOnlyMatchingItemAndRemovesEmptyRows() {
+        // A consolidated report's keyboard: a row of buttons for size S, and a row for size M.
+        final var markup = new InlineKeyboardMarkup()
+                .addRow(
+                        new InlineKeyboardButton("watch S").callbackData("SIZE_WATCH:" + KEY + ":S"),
+                        new InlineKeyboardButton("stop S").callbackData("SIZE_STOP:" + KEY + ":S")
+                )
+                .addRow(
+                        new InlineKeyboardButton("watch M").callbackData("SIZE_WATCH:" + KEY + ":M"),
+                        new InlineKeyboardButton("stop M").callbackData("SIZE_STOP:" + KEY + ":M")
+                );
+
+        final var filtered = ZaraTelegramListener.filterOutButtons(markup, Set.of(
+                "SIZE_WATCH:" + KEY + ":S",
+                "SIZE_AWAIT:" + KEY + ":S",
+                "SIZE_STOP:" + KEY + ":S"
+        ));
+
+        final var datas = Arrays.stream(filtered.inlineKeyboard())
+                .flatMap(Arrays::stream)
+                .map(InlineKeyboardButton::callbackData)
+                .toList();
+        // S's whole row is gone (emptied), M's row is untouched.
+        assertThat(filtered.inlineKeyboard().length).isEqualTo(1);
+        assertThat(datas).containsExactly("SIZE_WATCH:" + KEY + ":M", "SIZE_STOP:" + KEY + ":M");
     }
 
     @Test

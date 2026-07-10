@@ -24,6 +24,7 @@ public class ZaraProperties {
     private final Api api = new Api();
     private final Driver driver = new Driver();
     private final Canary canary = new Canary();
+    private final Monitor monitor = new Monitor();
 
     @Getter
     @Setter
@@ -50,5 +51,23 @@ public class ZaraProperties {
          * product: catches selector breakage before the fallback is actually needed.
          */
         private boolean enabled = true;
+    }
+
+    @Getter
+    @Setter
+    public static class Monitor {
+        /**
+         * Debounce: how many consecutive checks must agree before an availability change is
+         * committed and notified. 2 filters CDN/edge-cache blips and "low stock, sold in seconds";
+         * 1 restores the old immediate behaviour.
+         */
+        private int confirmations = 2;
+
+        /**
+         * Before notifying a size/product came back in stock, cross-check the transition with the
+         * Selenium/DOM path (only when the primary reading came from the API). The DOM detects the
+         * real "unavailable" page that a stale API {@code in_stock} can lie about.
+         */
+        private boolean confirmRestockViaSelenium = true;
     }
 }

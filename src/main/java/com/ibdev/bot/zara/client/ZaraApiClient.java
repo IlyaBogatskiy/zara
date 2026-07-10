@@ -11,6 +11,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -30,10 +31,12 @@ public class ZaraApiClient {
      */
     private static final Pattern STORE_PATH = Pattern.compile("^(/[a-z]{2}/[a-z]{2}/)");
 
+    private static final String LOW_ON_STOCK = "low_on_stock";
+
     /**
-     * low_on_stock still means the item can be bought.
+     * low_on_stock still means the item can be bought (but flagged separately — see lowStockSizes).
      */
-    private static final Set<String> IN_STOCK_VALUES = Set.of("in_stock", "low_on_stock");
+    private static final Set<String> IN_STOCK_VALUES = Set.of("in_stock", LOW_ON_STOCK);
 
     private final RestClient zaraRestClient;
     private final JsonMapper jsonMapper = JsonMapper.builder().build();
@@ -55,6 +58,7 @@ public class ZaraApiClient {
         }
 
         final var state = new LinkedHashMap<String, Boolean>();
+        final var lowStock = new LinkedHashSet<String>();
         var anyInStock = false;
 
         for (final JsonNode size : sizes) {
@@ -63,9 +67,13 @@ public class ZaraApiClient {
                 continue;
             }
 
-            final var inStock = isInStock(size);
+            final var availability = size.path("availability").asString();
+            final var inStock = IN_STOCK_VALUES.contains(availability);
             state.put(name, inStock);
             anyInStock |= inStock;
+            if (LOW_ON_STOCK.equals(availability)) {
+                lowStock.add(name);
+            }
         }
 
         if (state.isEmpty()) {
@@ -73,7 +81,7 @@ public class ZaraApiClient {
         }
 
         state.put(WHOLE.getSize(), anyInStock);
-        return new ProductSnapshot(state, parsePrice(match.color()));
+        return new ProductSnapshot(state, parsePrice(match.color()), lowStock);
     }
 
     /**

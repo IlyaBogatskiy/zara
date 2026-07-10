@@ -12,6 +12,7 @@ import com.pengrad.telegrambot.model.CallbackQuery;
 import com.pengrad.telegrambot.model.Update;
 import com.pengrad.telegrambot.model.request.KeyboardButton;
 import com.pengrad.telegrambot.model.request.ReplyKeyboardMarkup;
+import com.pengrad.telegrambot.request.AnswerCallbackQuery;
 import com.pengrad.telegrambot.request.EditMessageReplyMarkup;
 import com.pengrad.telegrambot.request.EditMessageText;
 import com.pengrad.telegrambot.request.SendMessage;
@@ -268,23 +269,24 @@ public class ZaraTelegramListener {
 
         if (data != null && data.startsWith(UserNotifier.CB_WHOLE_KEEP_PREFIX)) {
             final var productKey = data.substring(UserNotifier.CB_WHOLE_KEEP_PREFIX.length());
-            editText(chatId, messageId, "⏳ Проверяю отсутствующие размеры...", null);
+            answerToast(cq, "⏳ Проверяю отсутствующие размеры…");
+            removeItemButtons(cq, Set.of(data));
             this.scrapingExecutor.execute(() -> keepMonitoringMissingSizes(chatId, productKey));
             return;
         }
 
         if (data != null && data.startsWith(UserNotifier.CB_SIZE_WATCH_PREFIX)) {
-            handleSizeDecision(chatId, messageId, data, UserNotifier.CB_SIZE_WATCH_PREFIX);
+            handleSizeDecision(cq, data, UserNotifier.CB_SIZE_WATCH_PREFIX);
             return;
         }
 
         if (data != null && data.startsWith(UserNotifier.CB_SIZE_AWAIT_PREFIX)) {
-            handleSizeDecision(chatId, messageId, data, UserNotifier.CB_SIZE_AWAIT_PREFIX);
+            handleSizeDecision(cq, data, UserNotifier.CB_SIZE_AWAIT_PREFIX);
             return;
         }
 
         if (data != null && data.startsWith(UserNotifier.CB_SIZE_STOP_PREFIX)) {
-            handleSizeDecision(chatId, messageId, data, UserNotifier.CB_SIZE_STOP_PREFIX);
+            handleSizeDecision(cq, data, UserNotifier.CB_SIZE_STOP_PREFIX);
             return;
         }
 
@@ -484,44 +486,88 @@ public class ZaraTelegramListener {
     }
 
     /**
-     * Handles the Yes/No buttons attached to "size appeared" / "size sold out"
-     * notifications. Payload after the prefix is "productKey:size".
+     * Handles the Yes/No buttons attached to "size appeared" / "size sold out" notifications,
+     * which now live inside a consolidated multi-item report. Payload after the prefix is
+     * "productKey:size". Confirmation is a transient toast (answerCallbackQuery) and only this
+     * item's own buttons are dropped from the report — the rest of it stays intact.
      */
-    private void handleSizeDecision(final long chatId, final int messageId, final String data, final String prefix) {
+    private void handleSizeDecision(final CallbackQuery cq, final String data, final String prefix) {
+        final var chatId = cq.message().chat().id();
         final var payload = data.substring(prefix.length());
         final var idx = payload.indexOf(':');
         if (idx <= 0 || idx == payload.length() - 1) {
-            editText(chatId, messageId, "Контекст устарел. Откройте товар заново.", null);
+            answerToast(cq, "Контекст устарел. Откройте товар заново.");
             return;
         }
         final var productKey = payload.substring(0, idx);
         final var size = payload.substring(idx + 1);
 
+        final String toast;
         switch (prefix) {
-            case UserNotifier.CB_SIZE_WATCH_PREFIX -> {
-                if (this.subscriptionService.watchInStock(chatId, productKey, size)) {
-                    editText(chatId, messageId,
-                            "✅ Хорошо! Слежу за размером " + size + ": сообщу, если изменится цена "
-                                    + "или размер снова пропадёт.", null);
-                } else {
-                    editText(chatId, messageId,
-                            "Не нашёл эту подписку. Пришлите ссылку на товар заново.", null);
-                }
-            }
-            case UserNotifier.CB_SIZE_AWAIT_PREFIX -> {
-                if (this.subscriptionService.awaitRestock(chatId, productKey, size)) {
-                    editText(chatId, messageId,
-                            "✅ Хорошо! Буду ждать появления размера " + size + " и сообщу.", null);
-                } else {
-                    editText(chatId, messageId,
-                            "Не нашёл эту подписку. Пришлите ссылку на товар заново.", null);
-                }
-            }
+            case UserNotifier.CB_SIZE_WATCH_PREFIX -> toast =
+                    this.subscriptionService.watchInStock(chatId, productKey, size)
+                            ? "✅ Слежу за размером " + size + ": сообщу об изменении цены или если снова пропадёт."
+                            : "Не нашёл эту подписку. Пришлите ссылку на товар заново.";
+            case UserNotifier.CB_SIZE_AWAIT_PREFIX -> toast =
+                    this.subscriptionService.awaitRestock(chatId, productKey, size)
+                            ? "✅ Буду ждать появления размера " + size + " и сообщу."
+                            : "Не нашёл эту подписку. Пришлите ссылку на товар заново.";
             default -> {
                 this.subscriptionService.unsubscribe(chatId, productKey, Set.of(size), USER_ACTION);
-                editText(chatId, messageId, "Ок, больше не слежу за размером " + size + ".", null);
+                toast = "Ок, больше не слежу за размером " + size + ".";
             }
         }
+
+        answerToast(cq, toast);
+        removeItemButtons(cq, Set.of(
+                UserNotifier.CB_SIZE_WATCH_PREFIX + payload,
+                UserNotifier.CB_SIZE_AWAIT_PREFIX + payload,
+                UserNotifier.CB_SIZE_STOP_PREFIX + payload
+        ));
+    }
+
+    /**
+     * Shows a transient popup on the callback button. Also stops Telegram's spinner on the button.
+     */
+    private void answerToast(final CallbackQuery cq, final String text) {
+        this.telegramBot.execute(new AnswerCallbackQuery(cq.id()).text(text));
+    }
+
+    /**
+     * Rebuilds the report's inline keyboard without the buttons whose callback data is in
+     * {@code datasToRemove}, leaving every other item's buttons in place. No-op when the callback
+     * message carries no keyboard (e.g. a legacy single-item notification).
+     */
+    private void removeItemButtons(final CallbackQuery cq, final Set<String> datasToRemove) {
+        final var message = cq.message();
+        final var markup = (message != null) ? message.replyMarkup() : null;
+        if (markup == null || markup.inlineKeyboard() == null) {
+            return;
+        }
+
+        this.telegramBot.execute(new EditMessageReplyMarkup(message.chat().id(), message.messageId())
+                .replyMarkup(filterOutButtons(markup, datasToRemove)));
+    }
+
+    /**
+     * Returns a copy of {@code markup} without the buttons whose callback data is in
+     * {@code datasToRemove}, dropping any row left empty. Extracted (and package-private) so the
+     * filtering can be unit-tested without a live Telegram callback.
+     */
+    static InlineKeyboardMarkup filterOutButtons(final InlineKeyboardMarkup markup, final Set<String> datasToRemove) {
+        final var rebuilt = new InlineKeyboardMarkup();
+        if (markup == null || markup.inlineKeyboard() == null) {
+            return rebuilt;
+        }
+        for (final var row : markup.inlineKeyboard()) {
+            final var kept = Arrays.stream(row)
+                    .filter(b -> b.callbackData() == null || !datasToRemove.contains(b.callbackData()))
+                    .toArray(InlineKeyboardButton[]::new);
+            if (kept.length > 0) {
+                rebuilt.addRow(kept);
+            }
+        }
+        return rebuilt;
     }
 
     private void openSubscriptionsMenu(long chatId) {

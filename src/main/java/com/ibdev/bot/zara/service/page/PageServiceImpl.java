@@ -71,6 +71,11 @@ public class PageServiceImpl implements PageService {
             }
         }
 
+        return checkViaSelenium(link);
+    }
+
+    @Override
+    public ProductSnapshot checkViaSelenium(final String link) {
         final var driver = webDriverFactory.create();
         final var wait = webDriverFactory.createWait(driver);
 

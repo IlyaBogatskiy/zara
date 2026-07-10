@@ -2,6 +2,7 @@ package com.ibdev.bot.zara.scheduler;
 
 import com.ibdev.bot.zara.client.PriceInfo;
 import com.ibdev.bot.zara.client.ProductSnapshot;
+import com.ibdev.bot.zara.config.ZaraProperties;
 import com.ibdev.bot.zara.notify.UserNotifier;
 import com.ibdev.bot.zara.service.page.PageService;
 import com.ibdev.bot.zara.service.subscription.SubscriptionService;
@@ -55,7 +56,16 @@ class MonitoringSchedulerTest {
 
     @BeforeEach
     void setUp() {
-        scheduler = new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot));
+        // Default to immediate commits and no Selenium confirmation, so the transition-logic tests
+        // stay focused; debounce/confirmation get their own tests that build a tuned scheduler.
+        scheduler = scheduler(1, false);
+    }
+
+    private MonitoringScheduler scheduler(final int confirmations, final boolean confirmViaSelenium) {
+        final var props = new ZaraProperties();
+        props.getMonitor().setConfirmations(confirmations);
+        props.getMonitor().setConfirmRestockViaSelenium(confirmViaSelenium);
+        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props);
     }
 
     private static Watch watch(final long chatId, final String size, final com.ibdev.bot.zara.storage.model.SubscriptionMode mode) {
@@ -167,6 +177,53 @@ class MonitoringSchedulerTest {
     }
 
     @Test
+    void foldsSeveralChangesForOneChatIntoASingleReport() {
+        seed(Map.of("S", false), Map.of(KEY, eur(2995)));
+        stubProduct(
+                List.of(watch(1L, "S", AWAIT_RESTOCK), watch(1L, "M", WATCH_IN_STOCK)),
+                Map.of("S", true, "M", true, "*", true),
+                eur(1797)
+        );
+
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(1);
+        assertThat(textOf(messages.getFirst()))
+                .contains("Размер S", "появился", "снизилась", "29.95 EUR", "17.97 EUR");
+    }
+
+    @Test
+    void foldsChangesAcrossProductsIntoOneReportPerChat() {
+        final var keyB = "07654321";
+        final var linkB = "https://www.zara.com/me/en/b-p07654321.html?v1=1";
+        final var refB = new SubscriptionService.ProductRef(linkB, "Product B");
+
+        when(subscriptionService.loadLastKnown())
+                .thenReturn(Map.of(KEY, Map.of("S", false), keyB, Map.of("M", false)));
+        when(subscriptionService.loadLastKnownPrices()).thenReturn(Map.of());
+        scheduler.seedLastKnown();
+
+        when(subscriptionService.activeProductKeys())
+                .thenReturn(new LinkedHashSet<>(List.of(KEY, keyB)));
+        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
+        when(subscriptionService.getProductRef(keyB)).thenReturn(refB);
+        when(pageService.checkProductSizesAvailability(LINK))
+                .thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null));
+        when(pageService.checkProductSizesAvailability(linkB))
+                .thenReturn(new ProductSnapshot(Map.of("M", true, "*", true), null));
+        when(subscriptionService.getActiveWatches(KEY)).thenReturn(List.of(watch(1L, "S", AWAIT_RESTOCK)));
+        when(subscriptionService.getActiveWatches(keyB)).thenReturn(List.of(watch(1L, "M", AWAIT_RESTOCK)));
+
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(1);
+        assertThat(textOf(messages.getFirst()))
+                .contains("Test product", "Размер S", "Product B", "Размер M");
+    }
+
+    @Test
     void notifiesPriceDropForInStockWatcher() {
         seed(Map.of("S", true), Map.of(KEY, eur(2995)));
         stubProduct(List.of(watch(1L, "S", WATCH_IN_STOCK)), Map.of("S", true, "*", true), eur(1797));
@@ -262,6 +319,77 @@ class MonitoringSchedulerTest {
         scheduler.monitor();
 
         assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился");
+    }
+
+    @Test
+    void debounceHoldsARestockUntilItIsSeenTwiceInARow() {
+        scheduler = scheduler(2, false);
+        seed(Map.of("S", false));
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", true, "*", true), null);
+
+        scheduler.monitor();
+        verify(telegramBot, never()).execute(any(SendMessage.class));
+
+        scheduler.monitor();
+        assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился");
+    }
+
+    @Test
+    void debounceIgnoresASingleTickBlip() {
+        scheduler = scheduler(2, false);
+        seed(Map.of("S", false));
+        when(subscriptionService.activeProductKeys()).thenReturn(Set.of(KEY));
+        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
+        when(subscriptionService.getActiveWatches(KEY)).thenReturn(List.of(watch(1L, "S", AWAIT_RESTOCK)));
+        // Blip in-stock for one tick, then back out — must never notify.
+        when(pageService.checkProductSizesAvailability(LINK))
+                .thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null))
+                .thenReturn(new ProductSnapshot(Map.of("S", false, "*", false), null));
+
+        scheduler.monitor();
+        scheduler.monitor();
+
+        verify(telegramBot, never()).execute(any(SendMessage.class));
+    }
+
+    @Test
+    void suppressesRestockWhenSeleniumSaysProductUnavailable() {
+        scheduler = scheduler(1, true);
+        seed(Map.of("S", false));
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", true, "*", true), null);
+        // The API said in-stock, but the real page is the "unavailable" one (only WHOLE=false).
+        when(pageService.checkViaSelenium(LINK)).thenReturn(new ProductSnapshot(Map.of("*", false), null));
+
+        scheduler.monitor();
+
+        verify(pageService).checkViaSelenium(LINK);
+        verify(telegramBot, never()).execute(any(SendMessage.class));
+    }
+
+    @Test
+    void notifiesRestockWhenSeleniumConfirmsAvailability() {
+        scheduler = scheduler(1, true);
+        seed(Map.of("S", false));
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", true, "*", true), null);
+        when(pageService.checkViaSelenium(LINK)).thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null));
+
+        scheduler.monitor();
+
+        assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился");
+    }
+
+    @Test
+    void marksLowStockInTheAppearedNotification() {
+        seed(Map.of("S", false));
+        when(subscriptionService.activeProductKeys()).thenReturn(Set.of(KEY));
+        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
+        when(subscriptionService.getActiveWatches(KEY)).thenReturn(List.of(watch(1L, "S", AWAIT_RESTOCK)));
+        when(pageService.checkProductSizesAvailability(LINK))
+                .thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null, Set.of("S")));
+
+        scheduler.monitor();
+
+        assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился", "Мало осталось");
     }
 
     @Test
