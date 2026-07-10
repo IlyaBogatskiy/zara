@@ -207,23 +207,21 @@ public class ZaraPageClient {
         }
     }
 
+    /**
+     * The FULL size lineup with real availability (in-stock sizes included), so the user
+     * can pick any size to track — not just the out-of-stock ones.
+     */
     private List<SizeInfo> readAllSizeDetails() {
         final var sizeLis = this.webDriver.findElements(SIZE_LI);
         final var result = new ArrayList<SizeInfo>();
 
         for (final var li : sizeLis) {
-            final var btn = li.findElement(SIZE_BTN);
-            if (!isInStock(btn)) {
-                result.add(mapOutOfStockSize(li));
-            }
+            final var label = li.findElement(SIZE_LABEL).getText().trim();
+            final var inStock = isInStock(li.findElement(SIZE_BTN));
+            result.add(new SizeInfo(label, inStock));
         }
 
         return result;
-    }
-
-    private SizeInfo mapOutOfStockSize(final WebElement li) {
-        final var sizeLabel = li.findElement(SIZE_LABEL).getText().trim();
-        return new SizeInfo(sizeLabel, false);
     }
 
     private boolean isInStock(final WebElement sizeButton) {

@@ -1,6 +1,7 @@
 package com.ibdev.bot.zara.service.subscription;
 
 import com.ibdev.bot.zara.client.ProductCard;
+import com.ibdev.bot.zara.client.SizeInfo;
 import com.ibdev.bot.zara.storage.repo.ProductRepository;
 import com.ibdev.bot.zara.storage.repo.SubscriptionRepository;
 import org.junit.jupiter.api.Test;
@@ -234,6 +235,47 @@ class SubscriptionServiceIntegrationTest {
 
         assertThat(subscriptionService.getActiveWatches("p124"))
                 .containsExactly(new SubscriptionService.Watch(124L, "S", SubscriptionMode.AWAIT_RESTOCK));
+    }
+
+    @Test
+    void subscribeAssignsModeByCurrentAvailability() {
+        final var card = new ProductCard(
+                "p125", "Test product p125",
+                "https://www.zara.com/me/en/test-pp125.html?v1=1",
+                List.of(new SizeInfo("S", false), new SizeInfo("M", true)),
+                null
+        );
+
+        subscriptionService.subscribe(125L, card, Set.of("S", "M"));
+
+        final var s = subscriptionRepository.findByChatIdAndProductKeyAndSizeLabel(125L, "p125", "S");
+        assertThat(s.getMode()).isEqualTo(AWAIT_RESTOCK);
+        assertThat(s.getLastKnownInStock()).isFalse();
+
+        final var m = subscriptionRepository.findByChatIdAndProductKeyAndSizeLabel(125L, "p125", "M");
+        assertThat(m.getMode()).isEqualTo(WATCH_IN_STOCK);
+        assertThat(m.getLastKnownInStock()).isTrue();
+
+        assertThat(subscriptionService.getActiveWatches("p125")).containsExactlyInAnyOrder(
+                new SubscriptionService.Watch(125L, "S", AWAIT_RESTOCK),
+                new SubscriptionService.Watch(125L, "M", WATCH_IN_STOCK)
+        );
+    }
+
+    @Test
+    void subscribeMatchesAvailabilityFuzzily() {
+        final var card = new ProductCard(
+                "p126", "Test product p126",
+                "https://www.zara.com/me/en/test-pp126.html?v1=1",
+                List.of(new SizeInfo("EU40", true)),
+                null
+        );
+
+        subscriptionService.subscribe(126L, card, Set.of("40"));
+
+        final var row = subscriptionRepository.findByChatIdAndProductKeyAndSizeLabel(126L, "p126", "40");
+        assertThat(row.getMode()).isEqualTo(WATCH_IN_STOCK);
+        assertThat(row.getLastKnownInStock()).isTrue();
     }
 
     @Test

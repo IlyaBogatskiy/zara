@@ -167,17 +167,17 @@ public class ZaraTelegramListener {
                 return;
             }
 
-            final var out = outOfStockSizes(card);
-            if (out.isEmpty()) {
-                send(
-                        chatId,
-                        textCard + "\n\n✅ Сейчас все размеры в наличии — отслеживание не нужно 🙂",
-                        null
-                );
+            if (sizesWithAvailability(card).isEmpty()) {
+                send(chatId, textCard + "\n\n❓ Не удалось получить размеры товара. Попробуй ещё раз позже.", null);
                 return;
             }
 
-            send(chatId, textCard + "\n\nХотите начать отслеживать? Выберите:", trackOrCancelKeyboard());
+            send(
+                    chatId,
+                    textCard + "\n\nМожно отслеживать любой размер: 🔴 — ждём появления, 🟢 — следим за ценой."
+                            + "\n\nХотите начать отслеживать? Выберите:",
+                    trackOrCancelKeyboard()
+            );
         } catch (Exception e) {
             send(chatId, "Ошибка при получении товара: " + safe(e), null);
         }
@@ -307,7 +307,7 @@ public class ZaraTelegramListener {
         }
 
         if (CB_TRACK.equals(data)) {
-            final var canPickSizes = card.getSizeDetails() != null && !outOfStockSizes(card).isEmpty();
+            final var canPickSizes = !sizesWithAvailability(card).isEmpty();
 
             if (isProductUnavailable(card) && !canPickSizes) {
                 session.getSelectedSizes().clear();
@@ -411,24 +411,12 @@ public class ZaraTelegramListener {
             session.getSelectedSizes().clear();
             session.setTrackWholeProduct(false);
 
+            final var confirmation = new StringBuilder("✅ Принято!\n").append(formatWatchPlan(card, diff.toAdd()));
             if (!diff.already().isEmpty()) {
-                editText(
-                        chatId,
-                        messageId,
-                        "✅ Добавил к отслеживанию: " + formatSizes(diff.toAdd())
-                                + "\nℹ️ Уже отслеживались: " + formatSizes(diff.already())
-                                + "\n\n" + card.getName(),
-                        null
-                );
-            } else {
-                editText(
-                        chatId,
-                        messageId,
-                        "✅ Принято! Буду отслеживать размеры: " + formatSizes(diff.toAdd())
-                                + "\n\n" + card.getName(),
-                        null
-                );
+                confirmation.append("\nℹ️ Уже отслеживались: ").append(formatSizes(diff.already()));
             }
+            confirmation.append("\n\n").append(card.getName());
+            editText(chatId, messageId, confirmation.toString(), null);
 
             return;
         }
@@ -719,14 +707,16 @@ public class ZaraTelegramListener {
     }
 
     private InlineKeyboardMarkup sizesKeyboard(ProductCard card, Set<String> selected) {
-        List<String> out = outOfStockSizes(card).stream().sorted().toList();
+        final var sizes = sizesWithAvailability(card);
 
         List<InlineKeyboardButton[]> rows = new ArrayList<>();
         List<InlineKeyboardButton> currentRow = new ArrayList<>(3);
 
-        for (String size : out) {
-            boolean picked = selected.contains(size);
-            String label = picked ? ("✅ " + size) : size;
+        for (final var entry : sizes.entrySet()) {
+            final var size = entry.getKey();
+            final var marker = entry.getValue() ? "🟢" : "🔴";
+            final var picked = selected.contains(size);
+            final var label = (picked ? "✅ " : "") + size + " " + marker;
 
             currentRow.add(new InlineKeyboardButton(label).callbackData(CB_TOGGLE_PREFIX + size));
 
@@ -795,19 +785,58 @@ public class ZaraTelegramListener {
         }
         sb.append("\n");
 
-        List<SizeInfo> sizes = card.getSizeDetails();
-        if (sizes == null || sizes.isEmpty()) {
+        final var sizes = sizesWithAvailability(card);
+        if (sizes.isEmpty()) {
             return sb.append("Размеры не найдены.").toString();
         }
 
-        sizes.stream()
-                .sorted(Comparator.comparing(this::sizeToString))
-                .forEach(s -> sb.append("• ")
-                        .append(sizeToString(s))
-                        .append(" — ")
-                        .append(s.getSize())
-                        .append("\n"));
+        sb.append("Размеры:\n");
+        sizes.forEach((size, available) -> sb.append("• ").append(size).append(" — ")
+                .append(available ? "🟢 в наличии" : "🔴 нет в наличии").append("\n"));
 
+        return sb.toString();
+    }
+
+    /**
+     * The full size lineup as a sorted {@code normalizedSize → inStock} map, excluding the
+     * WHOLE "*" sentinel. Drives both the card text and the size picker.
+     */
+    private Map<String, Boolean> sizesWithAvailability(final ProductCard card) {
+        final var result = new LinkedHashMap<String, Boolean>();
+        if (card == null || card.getSizeDetails() == null) {
+            return result;
+        }
+        card.getSizeDetails().stream()
+                .filter(s -> s.getSize() != null && !s.getSize().isBlank())
+                .filter(s -> !WHOLE.getSize().equals(s.getSize().trim()))
+                .sorted(Comparator.comparing(s -> normalizeSize(s.getSize())))
+                .forEach(s -> result.put(normalizeSize(s.getSize()), s.isSizeAvailability()));
+        return result;
+    }
+
+    /**
+     * Human-readable plan for the sizes just subscribed, grouped by what the bot will do:
+     * out-of-stock → wait for a restock; in-stock → watch price / sell-out.
+     */
+    private String formatWatchPlan(final ProductCard card, final Set<String> sizes) {
+        final var availability = sizesWithAvailability(card);
+        final var awaited = new java.util.TreeSet<String>();
+        final var watched = new java.util.TreeSet<String>();
+        for (final var size : sizes) {
+            if (Boolean.TRUE.equals(availability.get(normalizeSize(size)))) {
+                watched.add(normalizeSize(size));
+            } else {
+                awaited.add(normalizeSize(size));
+            }
+        }
+
+        final var sb = new StringBuilder();
+        if (!awaited.isEmpty()) {
+            sb.append("⏳ Жду появления: ").append(awaited).append("\n");
+        }
+        if (!watched.isEmpty()) {
+            sb.append("💰 Слежу за ценой (уже в наличии): ").append(watched).append("\n");
+        }
         return sb.toString();
     }
 

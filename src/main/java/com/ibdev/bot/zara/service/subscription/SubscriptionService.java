@@ -104,22 +104,45 @@ public class SubscriptionService {
         final var productKey = card.getProductKey();
 
         upsertProduct(productKey, card.getName(), card.getLink());
-        for (final var size : sizes) {
-            final var existing = this.subscriptionRepository
-                    .findByChatIdAndProductKeyAndSizeLabel(chatId, productKey, size);
-
-            if (existing == null) {
-                this.subscriptionRepository.save(new Subscription(chatId, productKey, size));
-            } else if (!existing.isActive()) {
-                existing.reopen();
-                this.subscriptionRepository.save(existing);
-            }
-        }
 
         final var sizeModes = new HashMap<String, SubscriptionMode>();
-        sizes.forEach(size -> sizeModes.put(size, AWAIT_RESTOCK));
+        for (final var size : sizes) {
+            final var inStock = isSizeInStock(card, size);
+            final var mode = inStock ? SubscriptionMode.WATCH_IN_STOCK : AWAIT_RESTOCK;
+
+            var subscription = this.subscriptionRepository
+                    .findByChatIdAndProductKeyAndSizeLabel(chatId, productKey, size);
+            if (subscription == null) {
+                subscription = new Subscription(chatId, productKey, size);
+            } else if (!subscription.isActive()) {
+                subscription.reopen();
+            }
+            subscription.setMode(mode);
+            subscription.setLastKnownInStock(inStock);
+            subscription.setLastCheckedAt(Instant.now());
+            this.subscriptionRepository.save(subscription);
+
+            sizeModes.put(size, mode);
+        }
+
         index(chatId, productKey, card.getLink(), card.getName(), sizeModes);
-        log.info("Chat {} subscribed to {} sizes {}", chatId, productKey, sizes);
+        log.info("Chat {} subscribed to {} sizes {}", chatId, productKey, sizeModes);
+    }
+
+    /**
+     * Fuzzy availability lookup of a size in the card's full lineup ("EU40" matches "40").
+     * Unknown sizes (e.g. the WHOLE "*" sentinel) are treated as out of stock.
+     */
+    private boolean isSizeInStock(final ProductCard card, final String size) {
+        if (card.getSizeDetails() == null) {
+            return false;
+        }
+        for (final var sizeInfo : card.getSizeDetails()) {
+            if (equalsSize(sizeInfo.getSize(), size)) {
+                return sizeInfo.isSizeAvailability();
+            }
+        }
+        return false;
     }
 
     /**

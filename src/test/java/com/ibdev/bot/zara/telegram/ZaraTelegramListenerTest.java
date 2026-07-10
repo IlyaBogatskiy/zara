@@ -132,13 +132,37 @@ class ZaraTelegramListenerTest {
     }
 
     @Test
-    void cardWithAllSizesInStockNeedsNoTracking() {
-        when(productCardCache.getOrLoad(KEY, LINK)).thenReturn(card());
+    void cardWithAllSizesInStockStillOffersTracking() {
+        when(productCardCache.getOrLoad(KEY, LINK))
+                .thenReturn(card(new SizeInfo("S", true), new SizeInfo("M", true)));
 
         sendText(LINK);
 
         final var sent = requests(2);
-        assertThat(textOf(sent.get(1))).contains("все размеры в наличии");
+        assertThat(textOf(sent.get(1))).contains("отслеживать");
+        assertThat(sent.get(1).getParameters().get("reply_markup")).isNotNull();
+    }
+
+    @Test
+    void picksInStockSizeAndConfirmationShowsPriceWatchPlan() {
+        final var loaded = card(new SizeInfo("S", false), new SizeInfo("M", true));
+        when(productCardCache.getOrLoad(KEY, LINK)).thenReturn(loaded);
+        when(subscriptionService.getSubscribedSizes(CHAT, KEY)).thenReturn(Set.of());
+
+        sendText(LINK);
+        requests(2);
+
+        sendCallback("TRACK");
+        sendCallback("TOGGLE:M"); // in-stock size — subscribing to watch its price
+        sendCallback("CONFIRM");
+
+        verify(subscriptionService, timeout(3000)).subscribe(eq(CHAT), eq(loaded), eq(Set.of("M")));
+
+        final var planShown = requests(1).stream()
+                .map(this::textOf)
+                .filter(t -> t != null)
+                .anyMatch(t -> t.contains("Слежу за ценой") && t.contains("M"));
+        assertThat(planShown).as("подтверждение показывает план 'слежу за ценой'").isTrue();
     }
 
     @Test

@@ -86,7 +86,8 @@ public class ZaraApiClient {
 
     /**
      * Product card. The convention matches ZaraPageClient.loadProductCard:
-     * sizeDetails contains only the sizes that are OUT of stock (sizeAvailability=false).
+     * sizeDetails carries the FULL size lineup, each with its real availability
+     * (sizeAvailability=true means in stock), so the user can pick any size to track.
      */
     public ProductCard loadProductCard(final String link) {
         final var match = findColor(link);
@@ -99,11 +100,11 @@ public class ZaraApiClient {
             return null;
         }
 
-        final var outOfStock = new ArrayList<SizeInfo>();
+        final var sizeDetails = new ArrayList<SizeInfo>();
         for (final JsonNode size : sizes) {
             final var name = sizeName(size);
-            if (name != null && !isInStock(size)) {
-                outOfStock.add(new SizeInfo(name, false));
+            if (name != null) {
+                sizeDetails.add(new SizeInfo(name, isInStock(size)));
             }
         }
 
@@ -111,7 +112,7 @@ public class ZaraApiClient {
         dto.setProductKey(extractProductId(link));
         dto.setLink(link);
         dto.setName(match.productName());
-        dto.setSizeDetails(outOfStock);
+        dto.setSizeDetails(sizeDetails);
         dto.setPrice(parsePrice(match.color()));
         return dto;
     }
