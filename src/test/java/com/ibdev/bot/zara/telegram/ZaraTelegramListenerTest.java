@@ -11,7 +11,6 @@ import com.pengrad.telegrambot.model.Update;
 import com.pengrad.telegrambot.model.request.InlineKeyboardButton;
 import com.pengrad.telegrambot.model.request.InlineKeyboardMarkup;
 import com.pengrad.telegrambot.request.BaseRequest;
-import com.pengrad.telegrambot.request.SendMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,10 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 import static com.ibdev.bot.zara.storage.model.SubscriptionChangeReason.USER_ACTION;
 import static com.ibdev.bot.zara.storage.model.SubscriptionMode.AWAIT_RESTOCK;
@@ -99,6 +95,18 @@ class ZaraTelegramListenerTest {
         return captor.getAllValues();
     }
 
+    private InlineKeyboardMarkup markupOf(final BaseRequest<?, ?> request) {
+        return (InlineKeyboardMarkup) request.getParameters().get("reply_markup");
+    }
+
+    private List<String> callbackDatas(final InlineKeyboardMarkup markup) {
+        return Arrays.stream(markup.inlineKeyboard())
+                .flatMap(Arrays::stream)
+                .map(InlineKeyboardButton::callbackData)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
     private String textOf(final BaseRequest<?, ?> request) {
         return (String) request.getParameters().get("text");
     }
@@ -153,14 +161,14 @@ class ZaraTelegramListenerTest {
         requests(2);
 
         sendCallback("TRACK");
-        sendCallback("TOGGLE:M"); // in-stock size — subscribing to watch its price
+        sendCallback("TOGGLE:M");
         sendCallback("CONFIRM");
 
         verify(subscriptionService, timeout(3000)).subscribe(eq(CHAT), eq(loaded), eq(Set.of("M")));
 
         final var planShown = requests(1).stream()
                 .map(this::textOf)
-                .filter(t -> t != null)
+                .filter(Objects::nonNull)
                 .anyMatch(t -> t.contains("Слежу за ценой") && t.contains("M"));
         assertThat(planShown).as("подтверждение показывает план 'слежу за ценой'").isTrue();
     }
@@ -241,7 +249,6 @@ class ZaraTelegramListenerTest {
 
     @Test
     void filterOutButtonsDropsOnlyMatchingItemAndRemovesEmptyRows() {
-        // A consolidated report's keyboard: a row of buttons for size S, and a row for size M.
         final var markup = new InlineKeyboardMarkup()
                 .addRow(
                         new InlineKeyboardButton("watch S").callbackData("SIZE_WATCH:" + KEY + ":S"),
@@ -262,9 +269,66 @@ class ZaraTelegramListenerTest {
                 .flatMap(Arrays::stream)
                 .map(InlineKeyboardButton::callbackData)
                 .toList();
-        // S's whole row is gone (emptied), M's row is untouched.
         assertThat(filtered.inlineKeyboard().length).isEqualTo(1);
         assertThat(datas).containsExactly("SIZE_WATCH:" + KEY + ":M", "SIZE_STOP:" + KEY + ":M");
+    }
+
+    @Test
+    void tappingSubscriptionResolvesWithoutPriorSessionState() {
+        when(subscriptionService.getSubscribedSizes(CHAT, KEY)).thenReturn(Set.of("S", "M"));
+        when(subscriptionService.getSubscribedSizeModes(CHAT, KEY)).thenReturn(Map.of("S", AWAIT_RESTOCK, "M", AWAIT_RESTOCK));
+        when(subscriptionService.getProductRef(KEY))
+                .thenReturn(new SubscriptionService.ProductRef(LINK, "Test product"));
+
+        sendCallback("SUB_OPEN:" + KEY);
+
+        final var last = requests(1).getLast();
+        assertThat(textOf(last)).contains("Отслеживаемые размеры");
+        assertThat(textOf(last)).doesNotContain("устарел");
+    }
+
+    @Test
+    void subscriptionsMenuOpensDetailsThenReturnsToList() {
+        when(subscriptionService.getAllSubscribedSizes(CHAT)).thenReturn(Map.of(KEY, Set.of("S", "M")));
+        when(subscriptionService.getSubscribedSizeModes(CHAT, KEY))
+                .thenReturn(Map.of("S", WATCH_IN_STOCK, "M", AWAIT_RESTOCK));
+        when(subscriptionService.getSubscribedSizes(CHAT, KEY)).thenReturn(Set.of("S", "M"));
+        when(subscriptionService.getProductRef(KEY))
+                .thenReturn(new SubscriptionService.ProductRef(LINK, "Test product"));
+
+        sendText("📌 Подписки");
+        final var listData = callbackDatas(markupOf(requests(1).getLast()));
+        final var openData = listData.stream().filter(d -> d.startsWith("SUB_OPEN:")).findFirst().orElseThrow();
+
+        sendCallback(openData);
+        final var details = requests(2).getLast();
+        assertThat(textOf(details)).contains("Отслеживаемые размеры");
+        final var detailsData = callbackDatas(markupOf(details));
+        assertThat(detailsData).anyMatch(d -> d.startsWith("SUB_TOGGLE:"));
+        assertThat(detailsData).contains("SUBS_MENU");
+
+        sendCallback("SUBS_MENU");
+        assertThat(textOf(requests(3).getLast())).contains("Ваши подписки");
+    }
+
+    @Test
+    void subscriptionsMenuTogglingASizeUnsubscribesAndRefreshesDetails() {
+        when(subscriptionService.getAllSubscribedSizes(CHAT)).thenReturn(Map.of(KEY, Set.of("S", "M")));
+        when(subscriptionService.getSubscribedSizeModes(CHAT, KEY)).thenReturn(Map.of("S", AWAIT_RESTOCK, "M", AWAIT_RESTOCK));
+        when(subscriptionService.getSubscribedSizes(CHAT, KEY)).thenReturn(Set.of("S", "M"));
+        when(subscriptionService.getProductRef(KEY))
+                .thenReturn(new SubscriptionService.ProductRef(LINK, "Test product"));
+
+        sendText("📌 Подписки");
+        final var openData = callbackDatas(markupOf(requests(1).getLast())).stream()
+                .filter(d -> d.startsWith("SUB_OPEN:")).findFirst().orElseThrow();
+        sendCallback(openData);
+
+        final var toggleData = callbackDatas(markupOf(requests(2).getLast())).stream()
+                .filter(d -> d.startsWith("SUB_TOGGLE:") && d.endsWith(":S")).findFirst().orElseThrow();
+        sendCallback(toggleData);
+
+        verify(subscriptionService).unsubscribe(CHAT, KEY, Set.of("S"), USER_ACTION);
     }
 
     @Test

@@ -192,7 +192,6 @@ public class ZaraTelegramListener {
         final var session = this.sessionCache.getOrCreate(chatId);
 
         if (CB_SUBS_MENU.equals(data)) {
-            session.getSubsTokens().clear();
             final var subs = this.subscriptionService.getAllSubscribedSizes(chatId);
             if (subs.isEmpty()) {
                 editText(chatId, messageId, "У вас пока нет активных подписок 🙂", null);
@@ -203,28 +202,26 @@ public class ZaraTelegramListener {
                     chatId,
                     messageId,
                     formatSubscriptionsList(chatId, subs),
-                    subscriptionsListKeyboard(session, subs)
+                    subscriptionsListKeyboard(subs)
             );
 
             return;
         }
 
         if (data != null && data.startsWith(CB_SUB_OPEN_PREFIX)) {
-            final var token = data.substring(CB_SUB_OPEN_PREFIX.length());
-            final var productKey = session.getSubsTokens().get(token);
-            if (productKey == null) {
-                editText(chatId, messageId, "Контекст меню устарел. Откройте /subs заново.", null);
+            final var productKey = data.substring(CB_SUB_OPEN_PREFIX.length());
+            if (productKey.isBlank()) {
+                editText(chatId, messageId, "Не удалось открыть подписку. Откройте подписки заново.", null);
                 return;
             }
-            openSubscriptionDetails(chatId, messageId, session, productKey);
+            openSubscriptionDetails(chatId, messageId, productKey);
             return;
         }
 
         if (data != null && data.startsWith(CB_SUB_UNSUB_ALL_PREFIX)) {
-            final var token = data.substring(CB_SUB_UNSUB_ALL_PREFIX.length());
-            final var productKey = session.getSubsTokens().get(token);
-            if (productKey == null) {
-                editText(chatId, messageId, "Контекст меню устарел. Откройте /subs заново.", null);
+            final var productKey = data.substring(CB_SUB_UNSUB_ALL_PREFIX.length());
+            if (productKey.isBlank()) {
+                editText(chatId, messageId, "Не удалось изменить подписку. Откройте подписки заново.", null);
                 return;
             }
 
@@ -246,24 +243,25 @@ public class ZaraTelegramListener {
                     chatId,
                     messageId,
                     formatSubscriptionsList(chatId, subs),
-                    subscriptionsListKeyboard(session, subs)
+                    subscriptionsListKeyboard(subs)
             );
 
             return;
         }
 
         if (data != null && data.startsWith(CB_SUB_TOGGLE_PREFIX)) {
-            final var size = normalizeSize(data.substring(CB_SUB_TOGGLE_PREFIX.length()));
-            final var productKey = session.getCurrentSubProductKey();
-
-            if (productKey == null) {
-                editText(chatId, messageId, "Контекст подписки потерян. Откройте /subs заново.", null);
+            final var payload = data.substring(CB_SUB_TOGGLE_PREFIX.length());
+            final var idx = payload.indexOf(':');
+            if (idx <= 0 || idx == payload.length() - 1) {
+                editText(chatId, messageId, "Не удалось изменить подписку. Откройте подписки заново.", null);
                 return;
             }
+            final var productKey = payload.substring(0, idx);
+            final var size = normalizeSize(payload.substring(idx + 1));
 
             this.subscriptionService.unsubscribe(chatId, productKey, Set.of(size), USER_ACTION);
 
-            openSubscriptionDetails(chatId, messageId, session, productKey);
+            openSubscriptionDetails(chatId, messageId, productKey);
             return;
         }
 
@@ -559,20 +557,16 @@ public class ZaraTelegramListener {
     }
 
     private void openSubscriptionsMenu(long chatId) {
-        final var session = this.sessionCache.getOrCreate(chatId);
-
         final var subs = this.subscriptionService.getAllSubscribedSizes(chatId);
         if (subs.isEmpty()) {
             send(chatId, "У вас пока нет активных подписок 🙂", null);
             return;
         }
 
-        session.getSubsTokens().clear();
-
         send(
                 chatId,
                 formatSubscriptionsList(chatId, subs),
-                subscriptionsListKeyboard(session, subs)
+                subscriptionsListKeyboard(subs)
         );
     }
 
@@ -605,22 +599,17 @@ public class ZaraTelegramListener {
                 .collect(Collectors.joining(", ", "[", "]"));
     }
 
-    private InlineKeyboardMarkup subscriptionsListKeyboard(
-            final ChatSession session,
-            final Map<String, Set<String>> subs
-    ) {
+    private InlineKeyboardMarkup subscriptionsListKeyboard(final Map<String, Set<String>> subs) {
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup();
 
-        int idx = 1;
         for (final var productKey : subs.keySet()) {
-            final var token = Integer.toString(idx++, 36);
-            session.getSubsTokens().put(token, productKey);
-
             final var title = productTitle(productKey);
             final var shortTitle = title.length() > 32 ? title.substring(0, 32) + "…" : title;
 
+            // The productKey (the short "-p<digits>" id) rides in the callback itself — no
+            // ephemeral session token, so the button still resolves after a restart/session eviction.
             kb.addRow(
-                    new InlineKeyboardButton(shortTitle).callbackData(CB_SUB_OPEN_PREFIX + token)
+                    new InlineKeyboardButton(shortTitle).callbackData(CB_SUB_OPEN_PREFIX + productKey)
             );
         }
 
@@ -628,11 +617,10 @@ public class ZaraTelegramListener {
         return kb;
     }
 
-    private void openSubscriptionDetails(long chatId, int messageId, ChatSession session, String productKey) {
+    private void openSubscriptionDetails(long chatId, int messageId, String productKey) {
         final var sizes = this.subscriptionService.getSubscribedSizes(chatId, productKey);
         if (sizes.isEmpty()) {
-            session.setCurrentSubProductKey(productKey);
-            editText(chatId, messageId, "Подписка уже неактуальна (пусто). Откройте /subs заново.", null);
+            editText(chatId, messageId, "Подписка уже неактуальна (пусто). Откройте подписки заново.", null);
             return;
         }
 
@@ -650,12 +638,11 @@ public class ZaraTelegramListener {
         }
         sb.append("\nНажмите на размер, чтобы отменить отслеживание.");
 
-        session.setCurrentSubProductKey(productKey);
         editText(
                 chatId,
                 messageId,
                 sb.toString(),
-                subscriptionDetailsKeyboard(session, productKey, sizes, modes)
+                subscriptionDetailsKeyboard(productKey, sizes, modes)
         );
     }
 
@@ -665,13 +652,15 @@ public class ZaraTelegramListener {
     }
 
     private InlineKeyboardMarkup subscriptionDetailsKeyboard(
-            ChatSession session, String productKey, Set<String> sizes, Map<String, SubscriptionMode> modes) {
+            String productKey, Set<String> sizes, Map<String, SubscriptionMode> modes) {
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup();
 
         List<InlineKeyboardButton> row = new ArrayList<>(3);
         for (String size : sizes.stream().sorted().toList()) {
             final var label = normalizeSize(size) + (modes.get(size) == WATCH_IN_STOCK ? " 💰" : "");
-            row.add(new InlineKeyboardButton(label).callbackData(CB_SUB_TOGGLE_PREFIX + normalizeSize(size)));
+            // payload = productKey:size — stateless, survives restart/session eviction.
+            row.add(new InlineKeyboardButton(label)
+                    .callbackData(CB_SUB_TOGGLE_PREFIX + productKey + ":" + normalizeSize(size)));
             if (row.size() == 3) {
                 kb.addRow(row.toArray(new InlineKeyboardButton[0]));
                 row.clear();
@@ -679,14 +668,8 @@ public class ZaraTelegramListener {
         }
         if (!row.isEmpty()) kb.addRow(row.toArray(new InlineKeyboardButton[0]));
 
-        session.getSubsTokens().entrySet().stream()
-                .filter(e -> Objects.equals(e.getValue(), productKey))
-                .map(Map.Entry::getKey)
-                .findFirst()
-                .ifPresent(token -> kb.addRow(
-                        new InlineKeyboardButton("🛑 Отписаться от всех размеров")
-                                .callbackData(CB_SUB_UNSUB_ALL_PREFIX + token)
-                ));
+        kb.addRow(new InlineKeyboardButton("🛑 Отписаться от всех размеров")
+                .callbackData(CB_SUB_UNSUB_ALL_PREFIX + productKey));
 
         kb.addRow(new InlineKeyboardButton("↩ Назад к списку").callbackData(CB_SUBS_MENU));
         return kb;
