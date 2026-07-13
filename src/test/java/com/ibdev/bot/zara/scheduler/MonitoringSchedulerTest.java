@@ -33,7 +33,6 @@ import static com.ibdev.bot.zara.storage.model.SubscriptionMode.AWAIT_RESTOCK;
 import static com.ibdev.bot.zara.storage.model.SubscriptionMode.WATCH_IN_STOCK;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -274,6 +273,34 @@ class MonitoringSchedulerTest {
         assertThat(textOf(message)).contains("Размер S", "пропал");
         assertThat(message.getParameters().get("reply_markup")).isNotNull();
         verify(subscriptionService, never()).unsubscribe(anyLong(), any(), any(), any());
+    }
+
+    /**
+     * Sold-out must notify even for an AWAIT_RESTOCK size — availability is tracked in both
+     * directions regardless of mode (mode only gates the extra price alerts).
+     */
+    @Test
+    void notifiesSoldOutEvenForAwaitRestockSize() {
+        seed(Map.of("S", true));
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", false, "*", false), null);
+
+        scheduler.monitor();
+
+        assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "пропал");
+    }
+
+    /**
+     * Appeared must notify even for a WATCH_IN_STOCK size — e.g. a watched size that sold out and
+     * came back is reported on its return, not just on the sell-out.
+     */
+    @Test
+    void notifiesAppearedEvenForWatchInStockSize() {
+        seed(Map.of("S", false));
+        stubProduct(List.of(watch(1L, "S", WATCH_IN_STOCK)), Map.of("S", true, "*", true), null);
+
+        scheduler.monitor();
+
+        assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился");
     }
 
     @Test

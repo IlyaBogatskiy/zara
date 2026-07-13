@@ -145,6 +145,10 @@ public class MonitoringScheduler {
      * "unavailable"), so {@link #confirmRestockViaSelenium} optionally cross-checks the watched sizes
      * against the DOM and reverts an unconfirmed flip. The full per-tick state is logged at DEBUG for
      * post-mortem analysis of why an alert fired.
+     * <p>
+     * Every tracked size is notified on <em>both</em> availability transitions — appeared and sold
+     * out — regardless of its {@link SubscriptionMode}. The mode only gates the extra <em>price</em>
+     * alerts (WATCH_IN_STOCK), which the user opts into via the "keep watching" button.
      */
     private void monitorProduct(final String productKey, final Map<Long, List<NotifyEvent>> reports) {
         final var ref = this.subscriptionService.getProductRef(productKey);
@@ -182,12 +186,11 @@ public class MonitoringScheduler {
         for (final var watch : watches) {
             if (WHOLE.getSize().equals(watch.size())) {
                 collectWholeProductIfAvailable(watch.chatId(), productKey, ref, current, reports);
-            } else if (watch.mode() == WATCH_IN_STOCK) {
-                collectSizeSoldOut(watch.chatId(), productKey, ref, watch.size(), previous, current, reports);
             } else {
                 collectSizeIfAppeared(
                         watch.chatId(), productKey, ref, watch.size(), previous, current,
                         snapshot.lowStockSizes(), reports);
+                collectSizeSoldOut(watch.chatId(), productKey, ref, watch.size(), previous, current, reports);
             }
         }
 
