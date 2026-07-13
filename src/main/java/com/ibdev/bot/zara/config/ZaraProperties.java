@@ -67,7 +67,12 @@ public class ZaraProperties {
          * Before notifying a size/product came back in stock, cross-check the transition with the
          * Selenium/DOM path (only when the primary reading came from the API). The DOM detects the
          * real "unavailable" page that a stale API {@code in_stock} can lie about.
+         * <p>
+         * <b>Off by default</b> (opt-in): this runs a heavy Selenium scrape <em>synchronously on the
+         * single-threaded scheduler</em>, which can block the whole tick for 10–120 s and, if the
+         * Selenium/DOM path is even slightly off, silently suppress real alerts. Enable only with a
+         * healthy, fast Selenium backend. The debounce ({@link #confirmations}) already filters blips.
          */
-        private boolean confirmRestockViaSelenium = true;
+        private boolean confirmRestockViaSelenium = false;
     }
 }

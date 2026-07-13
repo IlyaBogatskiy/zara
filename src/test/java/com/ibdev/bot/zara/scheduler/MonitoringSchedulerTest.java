@@ -7,6 +7,10 @@ import com.ibdev.bot.zara.notify.UserNotifier;
 import com.ibdev.bot.zara.service.page.PageService;
 import com.ibdev.bot.zara.service.subscription.SubscriptionService;
 import com.ibdev.bot.zara.service.subscription.SubscriptionService.Watch;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.pengrad.telegrambot.TelegramBot;
 import com.pengrad.telegrambot.request.SendMessage;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +21,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -54,10 +59,12 @@ class MonitoringSchedulerTest {
 
     private MonitoringScheduler scheduler;
 
+    /**
+     * Defaults to immediate commits and no Selenium confirmation, so the transition-logic tests stay
+     * focused; debounce and confirmation get their own tests that build a tuned scheduler.
+     */
     @BeforeEach
     void setUp() {
-        // Default to immediate commits and no Selenium confirmation, so the transition-logic tests
-        // stay focused; debounce/confirmation get their own tests that build a tuned scheduler.
         scheduler = scheduler(1, false);
     }
 
@@ -334,6 +341,9 @@ class MonitoringSchedulerTest {
         assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился");
     }
 
+    /**
+     * A blip in-stock for one tick, then back out, must never notify.
+     */
     @Test
     void debounceIgnoresASingleTickBlip() {
         scheduler = scheduler(2, false);
@@ -341,7 +351,6 @@ class MonitoringSchedulerTest {
         when(subscriptionService.activeProductKeys()).thenReturn(Set.of(KEY));
         when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
         when(subscriptionService.getActiveWatches(KEY)).thenReturn(List.of(watch(1L, "S", AWAIT_RESTOCK)));
-        // Blip in-stock for one tick, then back out — must never notify.
         when(pageService.checkProductSizesAvailability(LINK))
                 .thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null))
                 .thenReturn(new ProductSnapshot(Map.of("S", false, "*", false), null));
@@ -352,12 +361,15 @@ class MonitoringSchedulerTest {
         verify(telegramBot, never()).execute(any(SendMessage.class));
     }
 
+    /**
+     * The API reports in-stock, but the real page is the "unavailable" one (only WHOLE=false), so
+     * the Selenium cross-check must suppress the false restock alert.
+     */
     @Test
     void suppressesRestockWhenSeleniumSaysProductUnavailable() {
         scheduler = scheduler(1, true);
         seed(Map.of("S", false));
         stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", true, "*", true), null);
-        // The API said in-stock, but the real page is the "unavailable" one (only WHOLE=false).
         when(pageService.checkViaSelenium(LINK)).thenReturn(new ProductSnapshot(Map.of("*", false), null));
 
         scheduler.monitor();
@@ -390,6 +402,46 @@ class MonitoringSchedulerTest {
         scheduler.monitor();
 
         assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился", "Мало осталось");
+    }
+
+    /**
+     * The audit line ties together WHAT (sold-out), WHO (chat 1), WHICH product+size, and WHY
+     * (confirmed transition) — enough to reconstruct why the alert fired at this moment.
+     */
+    @Test
+    void logsTheCauseOfEachAlertForPostMortemAnalysis() {
+        seed(Map.of("S", true), Map.of(KEY, eur(1797)));
+        stubProduct(List.of(watch(1L, "S", WATCH_IN_STOCK)), Map.of("S", false, "*", false), eur(1797));
+
+        final var logs = captureMonitoringLogs(() -> scheduler.monitor());
+
+        assertThat(logs).anySatisfy(line -> assertThat(line)
+                .contains("SIZE_SOLD_OUT", KEY, "chat 1", "'S'"));
+    }
+
+    private List<String> captureMonitoringLogs(final Runnable action) {
+        final var logbackLogger = (Logger) LoggerFactory.getLogger(MonitoringScheduler.class);
+        final var appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        final var previousLevel = logbackLogger.getLevel();
+        logbackLogger.setLevel(Level.INFO);
+        logbackLogger.addAppender(appender);
+        try {
+            action.run();
+        } finally {
+            logbackLogger.detachAppender(appender);
+            logbackLogger.setLevel(previousLevel);
+        }
+        return appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    /**
+     * Regression guard: enabling it by default put a synchronous Selenium scrape on the
+     * single-threaded scheduler, which delayed and suppressed alerts. It must stay opt-in.
+     */
+    @Test
+    void seleniumRestockConfirmationIsOffByDefault() {
+        assertThat(new ZaraProperties().getMonitor().isConfirmRestockViaSelenium()).isFalse();
     }
 
     @Test

@@ -95,6 +95,12 @@ public class MonitoringScheduler {
         }
     }
 
+    /**
+     * One monitoring tick: one scrape per product, changes accumulated per chat across all products,
+     * then flushed as a single consolidated report per chat. Collapsing a burst of simultaneous
+     * changes into one message keeps the count low, so far fewer notifications are dropped by
+     * Telegram's rate limits. Insertion order preserves product/event ordering within a report.
+     */
     @Scheduled(fixedDelayString = "${zara.monitor.period-ms:60000}")
     public void monitor() {
         final var productKeys = this.subscriptionService.activeProductKeys();
@@ -107,9 +113,6 @@ public class MonitoringScheduler {
         }
 
         final var startedAt = System.currentTimeMillis();
-        // Accumulate every chat's changes across all products, then send one report per chat —
-        // a burst of simultaneous changes becomes one message instead of many (fewer dropped by
-        // Telegram rate limits). Insertion order preserves product/event ordering within a report.
         final var reports = new LinkedHashMap<Long, List<NotifyEvent>>();
         for (final var productKey : productKeys) {
             try {
@@ -135,17 +138,25 @@ public class MonitoringScheduler {
      * One scrape per product per tick — regardless of how many chats subscribed. Changes are
      * appended to {@code reports} (chatId → events) rather than sent immediately; the caller flushes
      * one consolidated report per chat after the whole tick.
+     * <p>
+     * The raw observation is folded through {@link #debounce}, which requires N consecutive agreeing
+     * observations before a change commits — {@code appeared} holds the sizes that just flipped
+     * OOS→in-stock. A just-committed restock may still be a stale-API lie (the real page shows
+     * "unavailable"), so {@link #confirmRestockViaSelenium} optionally cross-checks the watched sizes
+     * against the DOM and reverts an unconfirmed flip. The full per-tick state is logged at DEBUG for
+     * post-mortem analysis of why an alert fired.
      */
     private void monitorProduct(final String productKey, final Map<Long, List<NotifyEvent>> reports) {
         final var ref = this.subscriptionService.getProductRef(productKey);
         if (ref == null) {
-            log.warn("No product ref for productKey {}, skipping.", productKey);
+            log.warn("MON [{}] no product ref, skipping.", productKey);
             return;
         }
 
         final var snapshot = this.pageService.checkProductSizesAvailability(ref.link());
         if (snapshot == null || snapshot.sizes() == null || snapshot.sizes().isEmpty()) {
-            log.warn("Empty availability state for productKey {}.", productKey);
+            log.warn("MON [{}] '{}' scrape returned no sizes — skipping tick (state unchanged, no alerts).",
+                    productKey, ref.name());
             return;
         }
 
@@ -154,20 +165,17 @@ public class MonitoringScheduler {
         final var previous = this.lastKnown.getOrDefault(productKey, Map.of());
         final var watches = this.subscriptionService.getActiveWatches(productKey);
 
-        // Debounce: fold the raw observation into the confirmed state, requiring N consecutive
-        // agreeing observations before a change commits. `appeared` = sizes that just flipped OOS→in.
+        log.debug("MON [{}] '{}' tick: raw={} price={} prevConfirmed={} watchers={}",
+                productKey, ref.name(), raw, formatPrice(price), previous, watches.size());
+
         final var appeared = new LinkedHashSet<String>();
         final var current = debounce(productKey, previous, raw, appeared);
 
-        // A just-committed restock can still be a stale-API lie (the product's real page shows
-        // "unavailable"). Cross-check the watched sizes against the Selenium/DOM path; on a definitive
-        // contradiction revert the flip so no false "appeared" goes out. On a Selenium error we trust
-        // the API. Only watched sizes are confirmed — an unwatched size flip notifies no one.
         final var watchedSizes = new HashSet<String>();
         for (final var watch : watches) {
             watchedSizes.add(watch.size());
         }
-        confirmRestockViaSelenium(ref.link(), appeared, current, watchedSizes);
+        confirmRestockViaSelenium(productKey, ref.link(), appeared, current, watchedSizes);
 
         collectPriceChangeIfMoved(productKey, ref, price, watches, reports);
 
@@ -231,11 +239,15 @@ public class MonitoringScheduler {
             if (flip.count >= need) {
                 pending.remove(size);
                 confirmed.put(size, rawValue);
+                log.info("MON [{}] size '{}' CONFIRMED {} → {} after {}/{} consistent checks",
+                        productKey, size, avail(confirmedValue), avail(rawValue), flip.count, need);
                 if (rawValue) {
                     appeared.add(size);
                 }
             } else {
                 confirmed.put(size, confirmedValue);
+                log.debug("MON [{}] size '{}' observed {} ({}/{}) — holding, confirmed stays {}",
+                        productKey, size, avail(rawValue), flip.count, need, avail(confirmedValue));
             }
         }
         return confirmed;
@@ -249,6 +261,7 @@ public class MonitoringScheduler {
      * Selenium scrape per product, and only on the rare tick when something restocked.
      */
     private void confirmRestockViaSelenium(
+            final String productKey,
             final String link,
             final Set<String> appeared,
             final Map<String, Boolean> confirmed,
@@ -269,25 +282,31 @@ public class MonitoringScheduler {
             return;
         }
 
+        log.info("MON [{}] restock of {} committed — cross-checking buyability via Selenium/DOM.",
+                productKey, toConfirm);
+
         final Map<String, Boolean> viaSelenium;
         try {
             final var seleniumSnapshot = this.pageService.checkViaSelenium(link);
             viaSelenium = (seleniumSnapshot == null) ? null : seleniumSnapshot.sizes();
         } catch (final Exception e) {
-            log.warn("Selenium restock confirmation failed for {} ({}) — trusting the API result.",
-                    link, e.getMessage());
+            log.warn("MON [{}] Selenium restock confirmation FAILED ({}) — trusting the API result, alert will fire.",
+                    productKey, e.getMessage());
             return;
         }
         if (viaSelenium == null) {
+            log.warn("MON [{}] Selenium confirmation returned nothing — trusting the API result.", productKey);
             return;
         }
 
         for (final var size : toConfirm) {
-            if (!availability(viaSelenium, size)) {
+            if (availability(viaSelenium, size)) {
+                log.info("MON [{}] size '{}' restock CONFIRMED by Selenium — alert will fire.", productKey, size);
+            } else {
                 confirmed.put(size, false);
                 appeared.remove(size);
-                log.info("Restock of size '{}' on {} not confirmed by Selenium — suppressing notification.",
-                        size, link);
+                log.info("MON [{}] size '{}' restock REJECTED by Selenium (DOM says not buyable) — "
+                        + "suppressing false 'appeared' alert.", productKey, size);
             }
         }
     }
@@ -311,7 +330,11 @@ public class MonitoringScheduler {
         }
 
         final var previousPrice = this.lastKnownPrice.get(productKey);
-        if (previousPrice == null || previousPrice.sameAmountAs(price)) {
+        if (previousPrice == null) {
+            log.debug("MON [{}] price {} — no baseline yet, seeding (no alert).", productKey, formatPrice(price));
+            return;
+        }
+        if (previousPrice.sameAmountAs(price)) {
             return;
         }
 
@@ -321,6 +344,8 @@ public class MonitoringScheduler {
                 chats.add(watch.chatId());
             }
         }
+        log.info("MON [{}] PRICE moved {} → {} — notifying {} price-watcher chat(s) {}",
+                productKey, formatPrice(previousPrice), formatPrice(price), chats.size(), chats);
         for (final var chatId : chats) {
             add(reports, chatId, new NotifyEvent.PriceMoved(
                     productKey, ref.name(), ref.link(), previousPrice, price));
@@ -342,6 +367,8 @@ public class MonitoringScheduler {
     ) {
         if (!availability(previous, size) && availability(current, size)) {
             final var lowStock = containsSize(lowStockSizes, size);
+            log.info("MON [{}] → chat {}: ALERT SIZE_APPEARED '{}' (confirmed OOS→in-stock; lowStock={})",
+                    productKey, chatId, size, lowStock);
             add(reports, chatId, new NotifyEvent.SizeAppeared(productKey, ref.name(), ref.link(), size, lowStock));
         }
     }
@@ -374,6 +401,8 @@ public class MonitoringScheduler {
             final Map<Long, List<NotifyEvent>> reports
     ) {
         if (availability(previous, size) && !availability(current, size)) {
+            log.info("MON [{}] → chat {}: ALERT SIZE_SOLD_OUT '{}' (confirmed in-stock→OOS)",
+                    productKey, chatId, size);
             add(reports, chatId, new NotifyEvent.SizeSoldOut(productKey, ref.name(), ref.link(), size));
         }
     }
@@ -402,6 +431,8 @@ public class MonitoringScheduler {
             }
         }
 
+        log.info("MON [{}] → chat {}: ALERT WHOLE_AVAILABLE (in-stock={}, still-missing={}) — auto-unsubscribing '*'",
+                productKey, chatId, availableSizes, unavailableSizes);
         add(reports, chatId, new NotifyEvent.WholeAvailable(
                 productKey, ref.name(), ref.link(), availableSizes, unavailableSizes));
 
@@ -418,5 +449,13 @@ public class MonitoringScheduler {
             }
         }
         return false;
+    }
+
+    private static String avail(final boolean inStock) {
+        return inStock ? "in-stock" : "OOS";
+    }
+
+    private static String formatPrice(final PriceInfo price) {
+        return price == null ? "n/a" : price.formatted();
     }
 }

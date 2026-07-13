@@ -599,6 +599,11 @@ public class ZaraTelegramListener {
                 .collect(Collectors.joining(", ", "[", "]"));
     }
 
+    /**
+     * The subscriptions list. Each button carries the productKey (the short "-p&lt;digits&gt;" id)
+     * directly in its callback data — no ephemeral session token — so it still resolves after a bot
+     * restart or session eviction.
+     */
     private InlineKeyboardMarkup subscriptionsListKeyboard(final Map<String, Set<String>> subs) {
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup();
 
@@ -606,8 +611,6 @@ public class ZaraTelegramListener {
             final var title = productTitle(productKey);
             final var shortTitle = title.length() > 32 ? title.substring(0, 32) + "…" : title;
 
-            // The productKey (the short "-p<digits>" id) rides in the callback itself — no
-            // ephemeral session token, so the button still resolves after a restart/session eviction.
             kb.addRow(
                     new InlineKeyboardButton(shortTitle).callbackData(CB_SUB_OPEN_PREFIX + productKey)
             );
@@ -651,6 +654,10 @@ public class ZaraTelegramListener {
         return (ref != null && ref.name() != null) ? ref.name() : productKey;
     }
 
+    /**
+     * The per-product details keyboard. Size-toggle buttons carry a stateless
+     * {@code productKey:size} payload, so they keep working after a restart or session eviction.
+     */
     private InlineKeyboardMarkup subscriptionDetailsKeyboard(
             String productKey, Set<String> sizes, Map<String, SubscriptionMode> modes) {
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup();
@@ -658,7 +665,6 @@ public class ZaraTelegramListener {
         List<InlineKeyboardButton> row = new ArrayList<>(3);
         for (String size : sizes.stream().sorted().toList()) {
             final var label = normalizeSize(size) + (modes.get(size) == WATCH_IN_STOCK ? " 💰" : "");
-            // payload = productKey:size — stateless, survives restart/session eviction.
             row.add(new InlineKeyboardButton(label)
                     .callbackData(CB_SUB_TOGGLE_PREFIX + productKey + ":" + normalizeSize(size)));
             if (row.size() == 3) {
