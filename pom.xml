@@ -5,7 +5,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.6</version>
+        <version>4.1.0</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.ibdev.bot</groupId>
@@ -30,10 +30,10 @@
         <java.version>21</java.version>
 
         <!-- overrides a Boot BOM managed version (bumps the whole Selenium group) -->
-        <selenium.version>4.44.0</selenium.version>
+        <selenium.version>4.46.0</selenium.version>
 
         <!-- versions of libraries outside the Boot BOM -->
-        <telegram-bot-api.version>10.0.0</telegram-bot-api.version>
+        <telegram-bot-api.version>10.1.0</telegram-bot-api.version>
         <springdoc.version>3.0.3</springdoc.version>
     </properties>
     <dependencies>

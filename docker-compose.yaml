@@ -41,7 +41,7 @@ services:
           memory: 512m
 
   selenium:
-    image: selenium/standalone-chrome:4.44.0   # keep in sync with selenium.version in pom.xml
+    image: selenium/standalone-chrome:4.46.0   # keep in sync with selenium.version in pom.xml
     restart: unless-stopped
     # Chrome crashes with the default 64 MB /dev/shm — 2 GB is the documented minimum
     shm_size: "2g"
