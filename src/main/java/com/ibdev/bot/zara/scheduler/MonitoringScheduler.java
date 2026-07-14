@@ -1,6 +1,7 @@
 package com.ibdev.bot.zara.scheduler;
 
 import com.ibdev.bot.zara.client.PriceInfo;
+import com.ibdev.bot.zara.client.ProductSnapshot;
 import com.ibdev.bot.zara.config.ZaraProperties;
 import com.ibdev.bot.zara.notify.NotifyEvent;
 import com.ibdev.bot.zara.notify.UserNotifier;
@@ -24,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.ibdev.bot.zara.client.ClothingSizes.WHOLE;
 import static com.ibdev.bot.zara.storage.model.SubscriptionChangeReason.AUTO_AVAILABLE;
@@ -114,9 +116,10 @@ public class MonitoringScheduler {
 
         final var startedAt = System.currentTimeMillis();
         final var reports = new LinkedHashMap<Long, List<NotifyEvent>>();
+        final var burstBudget = new AtomicInteger(this.properties.getMonitor().getBurstConfirmMaxPerTick());
         for (final var productKey : productKeys) {
             try {
-                monitorProduct(productKey, reports);
+                monitorProduct(productKey, reports, burstBudget);
             } catch (final Exception e) {
                 log.error("Monitoring failed for productKey {}: {}", productKey, e.getMessage(), e);
             }
@@ -139,9 +142,11 @@ public class MonitoringScheduler {
      * appended to {@code reports} (chatId → events) rather than sent immediately; the caller flushes
      * one consolidated report per chat after the whole tick.
      * <p>
-     * The raw observation is folded through {@link #debounce}, which requires N consecutive agreeing
+     * The raw observation is folded through {@link #foldObservation}, which requires N agreeing
      * observations before a change commits — {@code appeared} holds the sizes that just flipped
-     * OOS→in-stock. A just-committed restock may still be a stale-API lie (the real page shows
+     * OOS→in-stock. When a watched size is still short of confirmation, {@link #burstConfirmIfNeeded}
+     * fetches the missing observation immediately (a fast re-scrape) instead of waiting a whole
+     * period. A just-committed restock may still be a stale-API lie (the real page shows
      * "unavailable"), so {@link #confirmRestockViaSelenium} optionally cross-checks the watched sizes
      * against the DOM and reverts an unconfirmed flip. The full per-tick state is logged at DEBUG for
      * post-mortem analysis of why an alert fired.
@@ -150,7 +155,11 @@ public class MonitoringScheduler {
      * out — regardless of its {@link SubscriptionMode}. The mode only gates the extra <em>price</em>
      * alerts (WATCH_IN_STOCK), which the user opts into via the "keep watching" button.
      */
-    private void monitorProduct(final String productKey, final Map<Long, List<NotifyEvent>> reports) {
+    private void monitorProduct(
+            final String productKey,
+            final Map<Long, List<NotifyEvent>> reports,
+            final AtomicInteger burstBudget
+    ) {
         final var ref = this.subscriptionService.getProductRef(productKey);
         if (ref == null) {
             log.warn("MON [{}] no product ref, skipping.", productKey);
@@ -173,7 +182,11 @@ public class MonitoringScheduler {
                 productKey, ref.name(), raw, formatPrice(price), previous, watches.size());
 
         final var appeared = new LinkedHashSet<String>();
-        final var current = debounce(productKey, previous, raw, appeared);
+        final var current = new LinkedHashMap<String, Boolean>(raw.size());
+        this.pendingFlips.computeIfAbsent(productKey, k -> new HashMap<>()).keySet().retainAll(raw.keySet());
+
+        foldObservation(productKey, previous, raw, current, appeared);
+        burstConfirmIfNeeded(productKey, ref, watches, previous, current, appeared, burstBudget);
 
         final var watchedSizes = new HashSet<String>();
         for (final var watch : watches) {
@@ -204,23 +217,23 @@ public class MonitoringScheduler {
     }
 
     /**
-     * Applies the confirmation debounce: returns the new confirmed state, and fills {@code appeared}
-     * with the sizes whose confirmed availability flips OOS→in-stock this tick. Comparison against the
-     * previous confirmed state is fuzzy ("EU40" == "40") because a restart seeds it from subscribed
-     * labels, which may differ from the scrape's raw labels.
+     * Folds one observation into the running {@code confirmed}/{@code appeared} state, advancing the
+     * per-size {@link #pendingFlips} counters: a change commits only after {@code confirmations}
+     * agreeing observations; a disagreeing one resets it. Called once per tick with the scrape, and a
+     * second time by {@link #burstConfirmIfNeeded} with the re-scrape. Comparison against the previous
+     * confirmed state is fuzzy ("EU40" == "40") because a restart seeds it from subscribed labels.
      */
-    private Map<String, Boolean> debounce(
+    private void foldObservation(
             final String productKey,
             final Map<String, Boolean> previousConfirmed,
-            final Map<String, Boolean> raw,
+            final Map<String, Boolean> observation,
+            final Map<String, Boolean> confirmed,
             final Set<String> appeared
     ) {
         final var need = Math.max(1, this.properties.getMonitor().getConfirmations());
         final var pending = this.pendingFlips.computeIfAbsent(productKey, k -> new HashMap<>());
-        pending.keySet().retainAll(raw.keySet());
 
-        final var confirmed = new LinkedHashMap<String, Boolean>(raw.size());
-        for (final var entry : raw.entrySet()) {
+        for (final var entry : observation.entrySet()) {
             final var size = entry.getKey();
             final var rawValue = TRUE.equals(entry.getValue());
             final var confirmedValue = availability(previousConfirmed, size);
@@ -253,7 +266,91 @@ public class MonitoringScheduler {
                         productKey, size, avail(rawValue), flip.count, need, avail(confirmedValue));
             }
         }
-        return confirmed;
+    }
+
+    /**
+     * When a watched size is still short of confirmation after the first observation, fetch the
+     * missing observation immediately — a fast API re-scrape after a short pause — instead of waiting
+     * a whole {@code period-ms} for the next tick. This cuts the confirmation half of the notification
+     * latency. Bounded by a per-tick budget so a "everything changed at once" tick cannot balloon; a
+     * failed/empty re-scrape degrades gracefully to the normal cross-tick debounce (never worse).
+     * Skipped when disabled or the API path is off (the primary reading was already Selenium).
+     */
+    private void burstConfirmIfNeeded(
+            final String productKey,
+            final SubscriptionService.ProductRef ref,
+            final List<Watch> watches,
+            final Map<String, Boolean> previous,
+            final Map<String, Boolean> confirmed,
+            final Set<String> appeared,
+            final AtomicInteger burstBudget
+    ) {
+        if (!this.properties.getMonitor().isBurstConfirm() || !this.properties.getApi().isEnabled()) {
+            return;
+        }
+        if (!hasUnconfirmedWatchedChange(productKey, watches)) {
+            return;
+        }
+        if (burstBudget.get() <= 0) {
+            log.debug("MON [{}] burst-confirm skipped — per-tick budget exhausted, using cross-tick debounce.",
+                    productKey);
+            return;
+        }
+        burstBudget.decrementAndGet();
+
+        if (!sleep(this.properties.getMonitor().getBurstConfirmDelayMs())) {
+            return;
+        }
+
+        final ProductSnapshot rescrape;
+        try {
+            rescrape = this.pageService.checkProductSizesAvailability(ref.link());
+        } catch (final Exception e) {
+            log.warn("MON [{}] burst-confirm re-scrape failed ({}) — falling back to cross-tick debounce.",
+                    productKey, e.getMessage());
+            return;
+        }
+        if (rescrape == null || rescrape.sizes() == null || rescrape.sizes().isEmpty()) {
+            log.debug("MON [{}] burst-confirm re-scrape returned nothing — falling back to cross-tick debounce.",
+                    productKey);
+            return;
+        }
+
+        log.info("MON [{}] burst-confirm: re-scraped to confirm a change without waiting a full period.",
+                productKey);
+        foldObservation(productKey, previous, rescrape.sizes(), confirmed, appeared);
+    }
+
+    /**
+     * Whether a watched size is still pending (disagrees with the confirmed state but not yet
+     * committed) after the first observation — the only case where a burst re-scrape is worth it.
+     */
+    private boolean hasUnconfirmedWatchedChange(final String productKey, final List<Watch> watches) {
+        final var pending = this.pendingFlips.get(productKey);
+        if (pending == null || pending.isEmpty()) {
+            return false;
+        }
+        for (final var watch : watches) {
+            for (final var pendingSize : pending.keySet()) {
+                if (equalsSize(pendingSize, watch.size())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean sleep(final long ms) {
+        if (ms <= 0) {
+            return true;
+        }
+        try {
+            Thread.sleep(ms);
+            return true;
+        } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     /**

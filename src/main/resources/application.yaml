@@ -6,7 +6,11 @@ telegram:
 ---
 zara:
   monitor:
-    period-ms: 60000
+    period-ms: 30000   # 30s: halves notification latency (with debounce=2, ~30-60s vs ~60-120s); scrape load stays light (~9 products x ~0.5s API per 30s)
+    confirmations: 2                 # debounce: agreeing observations required before a change is committed/notified
+    burst-confirm: true              # on a watched change, fetch the confirming observation now (fast re-scrape) instead of waiting a full period
+    burst-confirm-delay-ms: 3000     # pause before the confirming re-scrape (tune on prod)
+    burst-confirm-max-per-tick: 3    # cap burst re-scrapes per tick; the rest fall back to cross-tick debounce
   api:
     enabled: true       # fast JSON path; false — Selenium only
   driver:

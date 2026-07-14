@@ -14,11 +14,15 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "zara")
 public class ZaraProperties {
 
-    /** User-Agent shared by both paths — Selenium and the HTTP API. */
+    /**
+     * User-Agent shared by both paths — Selenium and the HTTP API.
+     */
     private String userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-    /** Operator chatId for technical alerts (selector breakage); null/0 — log only. */
+    /**
+     * Operator chatId for technical alerts (selector breakage); null/0 — log only.
+     */
     private Long adminChatId;
 
     private final Api api = new Api();
@@ -29,17 +33,23 @@ public class ZaraProperties {
     @Getter
     @Setter
     public static class Api {
-        /** The fast JSON path (products-details). false — everything goes through Selenium. */
+        /**
+         * The fast JSON path (products-details). false — everything goes through Selenium.
+         */
         private boolean enabled = true;
     }
 
     @Getter
     @Setter
     public static class Driver {
-        /** WebDriverWait timeout, in seconds. */
+        /**
+         * WebDriverWait timeout, in seconds.
+         */
         private int waitSeconds = 15;
 
-        /** Remote WebDriver URL (Selenium Grid / standalone-chrome); blank — local ChromeDriver. */
+        /**
+         * Remote WebDriver URL (Selenium Grid / standalone-chrome); blank — local ChromeDriver.
+         */
         private String remoteUrl = "";
     }
 
@@ -74,5 +84,27 @@ public class ZaraProperties {
          * healthy, fast Selenium backend. The debounce ({@link #confirmations}) already filters blips.
          */
         private boolean confirmRestockViaSelenium = false;
+
+        /**
+         * Burst-confirm: when a watched size first disagrees with the confirmed state, fetch the
+         * missing confirming observation(s) immediately (a fast API re-scrape after a short pause)
+         * instead of waiting a whole {@code period-ms} for the next scheduled tick. Cuts the
+         * confirmation half of the notification latency from ~one period to ~{@link #burstConfirmDelayMs}.
+         * Trade-off: the two reads are only seconds apart, so slightly less independent than the
+         * cross-tick debounce (may echo a stale CDN edge); the cross-tick debounce stays as the backstop.
+         */
+        private boolean burstConfirm = true;
+
+        /**
+         * Pause before each confirming re-scrape (ms) — long enough to have a chance at a refreshed
+         * CDN reading, short enough to keep the latency win.
+         */
+        private long burstConfirmDelayMs = 3000;
+
+        /**
+         * Cap on how many products may be burst-confirmed within a single tick, so a pathological
+         * "everything changed at once" tick cannot balloon; the rest confirm via the normal debounce.
+         */
+        private int burstConfirmMaxPerTick = 3;
     }
 }

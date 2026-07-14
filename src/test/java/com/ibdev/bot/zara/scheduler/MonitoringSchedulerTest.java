@@ -21,6 +21,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.mockito.stubbing.OngoingStubbing;
 import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashSet;
@@ -71,6 +72,17 @@ class MonitoringSchedulerTest {
         final var props = new ZaraProperties();
         props.getMonitor().setConfirmations(confirmations);
         props.getMonitor().setConfirmRestockViaSelenium(confirmViaSelenium);
+        props.getMonitor().setBurstConfirm(false);
+        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props);
+    }
+
+    private MonitoringScheduler burstScheduler(final int confirmations, final int maxPerTick) {
+        final var props = new ZaraProperties();
+        props.getMonitor().setConfirmations(confirmations);
+        props.getMonitor().setConfirmRestockViaSelenium(false);
+        props.getMonitor().setBurstConfirm(true);
+        props.getMonitor().setBurstConfirmDelayMs(0);
+        props.getMonitor().setBurstConfirmMaxPerTick(maxPerTick);
         return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props);
     }
 
@@ -87,6 +99,24 @@ class MonitoringSchedulerTest {
         when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
         when(pageService.checkProductSizesAvailability(LINK)).thenReturn(new ProductSnapshot(sizes, price));
         when(subscriptionService.getActiveWatches(KEY)).thenReturn(watches);
+    }
+
+    /**
+     * Stubs one product whose scrape returns the given snapshots on successive ticks — the harness
+     * for multi-tick lifecycle scenarios (appear → sell out → appear, several sizes at once, etc.).
+     */
+    private void stubProductSequence(final List<Watch> watches, final ProductSnapshot... snapshots) {
+        when(subscriptionService.activeProductKeys()).thenReturn(Set.of(KEY));
+        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
+        when(subscriptionService.getActiveWatches(KEY)).thenReturn(watches);
+        OngoingStubbing<ProductSnapshot> stub = when(pageService.checkProductSizesAvailability(LINK));
+        for (final var snapshot : snapshots) {
+            stub = stub.thenReturn(snapshot);
+        }
+    }
+
+    private static ProductSnapshot snap(final Map<String, Boolean> sizes) {
+        return new ProductSnapshot(sizes, null);
     }
 
     private void seed(final Map<String, Boolean> sizes) {
@@ -303,6 +333,250 @@ class MonitoringSchedulerTest {
         assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился");
     }
 
+    /**
+     * A monitored size that sells out and then comes back must alert on BOTH transitions, in order.
+     */
+    @Test
+    void notifiesOnSellOutThenRestockOfSingleSize() {
+        seed(Map.of("S", true));
+        stubProductSequence(List.of(watch(1L, "S", AWAIT_RESTOCK)),
+                snap(Map.of("S", false, "*", false)),
+                snap(Map.of("S", true, "*", true)));
+
+        scheduler.monitor();
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(2);
+        assertThat(textOf(messages.get(0))).contains("Размер S", "пропал");
+        assertThat(textOf(messages.get(1))).contains("Размер S", "появился");
+    }
+
+    /**
+     * Full lifecycle of one size on one product: appeared → sold out → appeared, one alert per tick.
+     */
+    @Test
+    void notifiesEveryTransitionOverAppearSellOutAppearLifecycle() {
+        seed(Map.of("S", false));
+        stubProductSequence(List.of(watch(1L, "S", AWAIT_RESTOCK)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", false, "*", false)),
+                snap(Map.of("S", true, "*", true)));
+
+        scheduler.monitor();
+        scheduler.monitor();
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(3);
+        assertThat(textOf(messages.get(0))).contains("Размер S", "появился");
+        assertThat(textOf(messages.get(1))).contains("Размер S", "пропал");
+        assertThat(textOf(messages.get(2))).contains("Размер S", "появился");
+    }
+
+    /**
+     * Two sizes of one product appearing, selling out, and reappearing together fold into ONE
+     * consolidated report per tick — not one message per size.
+     */
+    @Test
+    void twoSizesAppearingAndSellingOutTogetherFoldIntoOneReportPerTick() {
+        seed(Map.of("S", false, "M", false));
+        stubProductSequence(List.of(watch(1L, "S", AWAIT_RESTOCK), watch(1L, "M", AWAIT_RESTOCK)),
+                snap(Map.of("S", true, "M", true, "*", true)),
+                snap(Map.of("S", false, "M", false, "*", false)),
+                snap(Map.of("S", true, "M", true, "*", true)));
+
+        scheduler.monitor();
+        scheduler.monitor();
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(3);
+        assertThat(textOf(messages.get(0))).contains("Размер S", "Размер M", "появился");
+        assertThat(textOf(messages.get(1))).contains("Размер S", "Размер M", "пропал");
+        assertThat(textOf(messages.get(2))).contains("Размер S", "Размер M", "появился");
+    }
+
+    /**
+     * The L/XL case: one size appears while another sells out on the same product in the same tick —
+     * both changes must arrive in a single combined report.
+     */
+    @Test
+    void oneSizeAppearingWhileAnotherSellsOutFoldsIntoOneReport() {
+        seed(Map.of("L", true, "XL", false));
+        stubProductSequence(List.of(watch(1L, "L", AWAIT_RESTOCK), watch(1L, "XL", AWAIT_RESTOCK)),
+                snap(Map.of("L", false, "XL", true, "*", true)));
+
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(1);
+        final var text = textOf(messages.getFirst());
+        assertThat(text).contains("Размер XL", "появился");
+        assertThat(text).contains("Размер L", "пропал");
+    }
+
+    /**
+     * Three sizes going through appeared → sold out → appeared together — each tick is one report
+     * carrying all three, proving consolidation scales past two sizes.
+     */
+    @Test
+    void threeSizesLifecycleFoldEachTickIntoOneReport() {
+        seed(Map.of("S", false, "M", false, "L", false));
+        stubProductSequence(
+                List.of(watch(1L, "S", AWAIT_RESTOCK), watch(1L, "M", AWAIT_RESTOCK), watch(1L, "L", AWAIT_RESTOCK)),
+                snap(Map.of("S", true, "M", true, "L", true, "*", true)),
+                snap(Map.of("S", false, "M", false, "L", false, "*", false)),
+                snap(Map.of("S", true, "M", true, "L", true, "*", true)));
+
+        scheduler.monitor();
+        scheduler.monitor();
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(3);
+        assertThat(textOf(messages.get(0))).contains("Размер S", "Размер M", "Размер L", "появился");
+        assertThat(textOf(messages.get(1))).contains("Размер S", "Размер M", "Размер L", "пропал");
+        assertThat(textOf(messages.get(2))).contains("Размер S", "Размер M", "Размер L", "появился");
+    }
+
+    /**
+     * Several products, each with several sizes, all changing in one tick — the chat still gets a
+     * single report grouped by product (a block per product, every size), one scrape per product.
+     */
+    @Test
+    void severalProductsEachWithSeveralSizesFoldIntoOneReportPerChat() {
+        final var keyB = "07654321";
+        final var linkB = "https://www.zara.com/me/en/b-p07654321.html?v1=1";
+        final var refB = new SubscriptionService.ProductRef(linkB, "Product B");
+
+        when(subscriptionService.loadLastKnown()).thenReturn(Map.of(
+                KEY, Map.of("S", false, "M", false),
+                keyB, Map.of("L", false, "XL", false)));
+        when(subscriptionService.loadLastKnownPrices()).thenReturn(Map.of());
+        scheduler.seedLastKnown();
+
+        when(subscriptionService.activeProductKeys()).thenReturn(new LinkedHashSet<>(List.of(KEY, keyB)));
+        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
+        when(subscriptionService.getProductRef(keyB)).thenReturn(refB);
+        when(pageService.checkProductSizesAvailability(LINK))
+                .thenReturn(new ProductSnapshot(Map.of("S", true, "M", true, "*", true), null));
+        when(pageService.checkProductSizesAvailability(linkB))
+                .thenReturn(new ProductSnapshot(Map.of("L", true, "XL", true, "*", true), null));
+        when(subscriptionService.getActiveWatches(KEY))
+                .thenReturn(List.of(watch(1L, "S", AWAIT_RESTOCK), watch(1L, "M", AWAIT_RESTOCK)));
+        when(subscriptionService.getActiveWatches(keyB))
+                .thenReturn(List.of(watch(1L, "L", AWAIT_RESTOCK), watch(1L, "XL", AWAIT_RESTOCK)));
+
+        scheduler.monitor();
+
+        verify(pageService, times(1)).checkProductSizesAvailability(LINK);
+        verify(pageService, times(1)).checkProductSizesAvailability(linkB);
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(1);
+        assertThat(textOf(messages.getFirst())).contains("Test product", "Product B",
+                "Размер S", "Размер M", "Размер L", "Размер XL", "появился");
+    }
+
+    /**
+     * Mirror lifecycle of one size: sold out → appeared → sold out, one alert per tick.
+     */
+    @Test
+    void notifiesEveryTransitionOverSellOutAppearSellOutLifecycle() {
+        seed(Map.of("S", true));
+        stubProductSequence(List.of(watch(1L, "S", AWAIT_RESTOCK)),
+                snap(Map.of("S", false, "*", false)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", false, "*", false)));
+
+        scheduler.monitor();
+        scheduler.monitor();
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(3);
+        assertThat(textOf(messages.get(0))).contains("Размер S", "пропал");
+        assertThat(textOf(messages.get(1))).contains("Размер S", "появился");
+        assertThat(textOf(messages.get(2))).contains("Размер S", "пропал");
+    }
+
+    /**
+     * When only some watched sizes change, the report carries only the changed ones — an unchanged
+     * size stays out of the message.
+     */
+    @Test
+    void reportsOnlyTheSizesThatActuallyChanged() {
+        seed(Map.of("S", false, "M", true));
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK), watch(1L, "M", AWAIT_RESTOCK)),
+                Map.of("S", true, "M", true, "*", true), null);
+
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(1);
+        final var text = textOf(messages.getFirst());
+        assertThat(text).contains("Размер S", "появился");
+        assertThat(text).doesNotContain("Размер M");
+    }
+
+    /**
+     * Two products changing across ticks: each is notified on its own transition, and changes that
+     * land in the same tick (S sells out on A while L appears on B) fold into one report.
+     */
+    @Test
+    void multiProductChangesAcrossTicksNotifyPerProductAndConsolidatePerTick() {
+        final var keyB = "07654321";
+        final var linkB = "https://www.zara.com/me/en/b-p07654321.html?v1=1";
+        final var refB = new SubscriptionService.ProductRef(linkB, "Product B");
+
+        when(subscriptionService.loadLastKnown()).thenReturn(Map.of(
+                KEY, Map.of("S", false), keyB, Map.of("L", false)));
+        when(subscriptionService.loadLastKnownPrices()).thenReturn(Map.of());
+        scheduler.seedLastKnown();
+
+        when(subscriptionService.activeProductKeys()).thenReturn(new LinkedHashSet<>(List.of(KEY, keyB)));
+        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
+        when(subscriptionService.getProductRef(keyB)).thenReturn(refB);
+        when(subscriptionService.getActiveWatches(KEY)).thenReturn(List.of(watch(1L, "S", AWAIT_RESTOCK)));
+        when(subscriptionService.getActiveWatches(keyB)).thenReturn(List.of(watch(1L, "L", AWAIT_RESTOCK)));
+
+        when(pageService.checkProductSizesAvailability(LINK))
+                .thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null))
+                .thenReturn(new ProductSnapshot(Map.of("S", false, "*", false), null));
+        when(pageService.checkProductSizesAvailability(linkB))
+                .thenReturn(new ProductSnapshot(Map.of("L", false, "*", false), null))
+                .thenReturn(new ProductSnapshot(Map.of("L", true, "*", true), null));
+
+        scheduler.monitor();
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(2);
+        assertThat(textOf(messages.get(0))).contains("Test product", "Размер S", "появился");
+        assertThat(textOf(messages.get(0))).doesNotContain("Product B");
+        assertThat(textOf(messages.get(1))).contains("Test product", "Размер S", "пропал");
+        assertThat(textOf(messages.get(1))).contains("Product B", "Размер L", "появился");
+    }
+
+    /**
+     * Two chats watching different sizes of the same product each get their own report — one scrape,
+     * per-chat isolation.
+     */
+    @Test
+    void severalChatsOnTheSameProductEachGetTheirOwnReport() {
+        seed(Map.of("S", false, "M", false));
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK), watch(2L, "M", AWAIT_RESTOCK)),
+                Map.of("S", true, "M", true, "*", true), null);
+
+        scheduler.monitor();
+
+        verify(pageService, times(1)).checkProductSizesAvailability(LINK);
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(2);
+        assertThat(messages).anySatisfy(m -> assertThat(textOf(m)).contains("Размер S", "появился"));
+        assertThat(messages).anySatisfy(m -> assertThat(textOf(m)).contains("Размер M", "появился"));
+    }
+
     @Test
     void wholeProductWithMissingSizesOffersKeepMonitoringButton() {
         stubProduct(List.of(watch(1L, "*", AWAIT_RESTOCK)), Map.of("S", true, "M", false, "*", true), null);
@@ -469,6 +743,120 @@ class MonitoringSchedulerTest {
     @Test
     void seleniumRestockConfirmationIsOffByDefault() {
         assertThat(new ZaraProperties().getMonitor().isConfirmRestockViaSelenium()).isFalse();
+    }
+
+    /**
+     * Burst-confirm fetches the second confirming observation immediately (a re-scrape), so a real
+     * change confirms and notifies within the same tick instead of waiting a whole period.
+     */
+    @Test
+    void burstConfirmCommitsRealChangeInOneTick() {
+        scheduler = burstScheduler(2, 3);
+        seed(Map.of("S", false));
+        stubProductSequence(List.of(watch(1L, "S", AWAIT_RESTOCK)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", true, "*", true)));
+
+        scheduler.monitor();
+
+        assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился");
+    }
+
+    /**
+     * A blip that flips back within the burst window (obs0 in-stock, obs1 back to OOS) must not
+     * notify — the fast confirmation still guards against a momentary flicker.
+     */
+    @Test
+    void burstConfirmSuppressesBlipWithinWindow() {
+        scheduler = burstScheduler(2, 3);
+        seed(Map.of("S", false));
+        stubProductSequence(List.of(watch(1L, "S", AWAIT_RESTOCK)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", false, "*", false)));
+
+        scheduler.monitor();
+
+        verify(telegramBot, never()).execute(any(SendMessage.class));
+    }
+
+    /**
+     * When the confirming re-scrape fails (returns null), burst-confirm degrades gracefully to the
+     * normal cross-tick debounce: silent on this tick, confirmed on the next — never worse than today.
+     */
+    @Test
+    void burstConfirmFallsBackToCrossTickWhenRescrapeFails() {
+        scheduler = burstScheduler(2, 3);
+        seed(Map.of("S", false));
+        when(subscriptionService.activeProductKeys()).thenReturn(Set.of(KEY));
+        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
+        when(subscriptionService.getActiveWatches(KEY)).thenReturn(List.of(watch(1L, "S", AWAIT_RESTOCK)));
+        when(pageService.checkProductSizesAvailability(LINK))
+                .thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null))
+                .thenReturn(null)
+                .thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null));
+
+        scheduler.monitor();
+        verify(telegramBot, never()).execute(any(SendMessage.class));
+
+        scheduler.monitor();
+        assertThat(textOf(sentMessages().getFirst())).contains("Размер S", "появился");
+    }
+
+    /**
+     * Burst-confirm only fires for a watched-size disagreement — a change to an unwatched size must
+     * not trigger an extra re-scrape.
+     */
+    @Test
+    void burstConfirmSkippedWhenOnlyUnwatchedSizesChange() {
+        scheduler = burstScheduler(2, 3);
+        seed(Map.of("S", true, "M", true));
+        stubProductSequence(List.of(watch(1L, "S", AWAIT_RESTOCK)),
+                snap(Map.of("S", true, "M", false, "*", true)));
+
+        scheduler.monitor();
+
+        verify(pageService, times(1)).checkProductSizesAvailability(LINK);
+        verify(telegramBot, never()).execute(any(SendMessage.class));
+    }
+
+    /**
+     * The per-tick burst budget caps how many products get the fast confirmation; the rest fall back
+     * to the cross-tick debounce. With budget 1 and two products restocking, only the first notifies
+     * this tick.
+     */
+    @Test
+    void burstConfirmRespectsMaxPerTickBudget() {
+        final var keyB = "07654321";
+        final var linkB = "https://www.zara.com/me/en/b-p07654321.html?v1=1";
+        final var refB = new SubscriptionService.ProductRef(linkB, "Product B");
+
+        scheduler = burstScheduler(2, 1);
+
+        when(subscriptionService.loadLastKnown()).thenReturn(Map.of(
+                KEY, Map.of("S", false), keyB, Map.of("S", false)));
+        when(subscriptionService.loadLastKnownPrices()).thenReturn(Map.of());
+        scheduler.seedLastKnown();
+
+        when(subscriptionService.activeProductKeys()).thenReturn(new LinkedHashSet<>(List.of(KEY, keyB)));
+        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
+        when(subscriptionService.getProductRef(keyB)).thenReturn(refB);
+        when(subscriptionService.getActiveWatches(KEY)).thenReturn(List.of(watch(1L, "S", AWAIT_RESTOCK)));
+        when(subscriptionService.getActiveWatches(keyB)).thenReturn(List.of(watch(2L, "S", AWAIT_RESTOCK)));
+        when(pageService.checkProductSizesAvailability(LINK))
+                .thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null));
+        when(pageService.checkProductSizesAvailability(linkB))
+                .thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null));
+
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(1);
+        assertThat(textOf(messages.getFirst())).contains("Test product", "Размер S", "появился");
+    }
+
+    @Test
+    void burstConfirmIsOnByDefault() {
+        assertThat(new ZaraProperties().getMonitor().isBurstConfirm()).isTrue();
     }
 
     @Test
