@@ -780,6 +780,29 @@ class MonitoringSchedulerTest {
     }
 
     /**
+     * Burst-confirm exists only to speed up restock (OOS→in-stock) alerts; it must NOT accelerate a
+     * sell-out. A watched in-stock size that reads OOS on both the tick scrape and the immediate
+     * burst re-scrape is still a seconds-long blip (the two reads are ~3s apart, not an independent
+     * cross-tick apart). Committing it — as burst once did — fired a false SIZE_SOLD_OUT, and the
+     * next tick's revert fired the mirror SIZE_APPEARED: the notification spam. A sell-out must
+     * instead wait for the cross-tick debounce, so burst does not even re-scrape and this tick stays
+     * silent.
+     */
+    @Test
+    void burstConfirmDoesNotAccelerateSellOut() {
+        scheduler = burstScheduler(2, 3);
+        seed(Map.of("S", true));
+        stubProductSequence(List.of(watch(1L, "S", WATCH_IN_STOCK)),
+                snap(Map.of("S", false, "*", false)),
+                snap(Map.of("S", false, "*", false)));
+
+        scheduler.monitor();
+
+        verify(telegramBot, never()).execute(any(SendMessage.class));
+        verify(pageService, times(1)).checkProductSizesAvailability(LINK);
+    }
+
+    /**
      * When the confirming re-scrape fails (returns null), burst-confirm degrades gracefully to the
      * normal cross-tick debounce: silent on this tick, confirmed on the next — never worse than today.
      */

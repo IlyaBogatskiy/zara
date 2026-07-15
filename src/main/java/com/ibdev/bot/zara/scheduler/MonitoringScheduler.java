@@ -185,7 +185,7 @@ public class MonitoringScheduler {
         final var current = new LinkedHashMap<String, Boolean>(raw.size());
         this.pendingFlips.computeIfAbsent(productKey, k -> new HashMap<>()).keySet().retainAll(raw.keySet());
 
-        foldObservation(productKey, previous, raw, current, appeared);
+        foldObservation(productKey, previous, raw, current, appeared, false);
         burstConfirmIfNeeded(productKey, ref, watches, previous, current, appeared, burstBudget);
 
         final var watchedSizes = new HashSet<String>();
@@ -219,16 +219,24 @@ public class MonitoringScheduler {
     /**
      * Folds one observation into the running {@code confirmed}/{@code appeared} state, advancing the
      * per-size {@link #pendingFlips} counters: a change commits only after {@code confirmations}
-     * agreeing observations; a disagreeing one resets it. Called once per tick with the scrape, and a
-     * second time by {@link #burstConfirmIfNeeded} with the re-scrape. Comparison against the previous
-     * confirmed state is fuzzy ("EU40" == "40") because a restart seeds it from subscribed labels.
+     * agreeing observations; a disagreeing one resets it. Called once per tick with the scrape
+     * ({@code burst == false}), and a second time by {@link #burstConfirmIfNeeded} with the re-scrape
+     * ({@code burst == true}). Comparison against the previous confirmed state is fuzzy ("EU40" ==
+     * "40") because a restart seeds it from subscribed labels.
+     * <p>
+     * When {@code burst} is set, a disagreement toward OOS is <em>not</em> advanced: burst-confirm
+     * exists only to accelerate a restock (OOS→in-stock), so a sell-out must wait for the independent
+     * cross-tick observation instead of being confirmed by a re-scrape seconds later. Folding a
+     * seconds-apart OOS reading into the count once let a momentary blip commit a false sell-out
+     * (immediately mirrored by an "appeared" on the next tick) — the notification spam this guards.
      */
     private void foldObservation(
             final String productKey,
             final Map<String, Boolean> previousConfirmed,
             final Map<String, Boolean> observation,
             final Map<String, Boolean> confirmed,
-            final Set<String> appeared
+            final Set<String> appeared,
+            final boolean burst
     ) {
         final var need = Math.max(1, this.properties.getMonitor().getConfirmations());
         final var pending = this.pendingFlips.computeIfAbsent(productKey, k -> new HashMap<>());
@@ -241,6 +249,11 @@ public class MonitoringScheduler {
             if (rawValue == confirmedValue) {
                 pending.remove(size);
                 confirmed.put(size, confirmedValue);
+                continue;
+            }
+
+            if (burst && !rawValue) {
+                confirmed.putIfAbsent(size, confirmedValue);
                 continue;
             }
 
@@ -262,7 +275,7 @@ public class MonitoringScheduler {
                 }
             } else {
                 confirmed.put(size, confirmedValue);
-                log.debug("MON [{}] size '{}' observed {} ({}/{}) — holding, confirmed stays {}",
+                log.info("MON [{}] size '{}' observed {} ({}/{}) — holding, confirmed stays {}",
                         productKey, size, avail(rawValue), flip.count, need, avail(confirmedValue));
             }
         }
@@ -318,12 +331,14 @@ public class MonitoringScheduler {
 
         log.info("MON [{}] burst-confirm: re-scraped to confirm a change without waiting a full period.",
                 productKey);
-        foldObservation(productKey, previous, rescrape.sizes(), confirmed, appeared);
+        foldObservation(productKey, previous, rescrape.sizes(), confirmed, appeared, true);
     }
 
     /**
-     * Whether a watched size is still pending (disagrees with the confirmed state but not yet
-     * committed) after the first observation — the only case where a burst re-scrape is worth it.
+     * Whether a watched size has a pending <em>restock</em> (a not-yet-committed OOS→in-stock flip)
+     * after the first observation — the only case where a burst re-scrape is worth it. A pending
+     * sell-out is deliberately excluded: burst-confirm only accelerates restocks, so confirming a
+     * sell-out is left to the independent cross-tick observation (see {@link #foldObservation}).
      */
     private boolean hasUnconfirmedWatchedChange(final String productKey, final List<Watch> watches) {
         final var pending = this.pendingFlips.get(productKey);
@@ -331,8 +346,8 @@ public class MonitoringScheduler {
             return false;
         }
         for (final var watch : watches) {
-            for (final var pendingSize : pending.keySet()) {
-                if (equalsSize(pendingSize, watch.size())) {
+            for (final var entry : pending.entrySet()) {
+                if (entry.getValue().value && equalsSize(entry.getKey(), watch.size())) {
                     return true;
                 }
             }
