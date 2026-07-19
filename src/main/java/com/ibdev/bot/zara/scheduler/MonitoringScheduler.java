@@ -68,6 +68,22 @@ public class MonitoringScheduler {
      */
     private final Map<String, PriceInfo> lastKnownPrice = new ConcurrentHashMap<>();
 
+    /**
+     * Anti-flap history: productKey → (size → its last committed flip and any active quarantine).
+     * Drives burst-confirm eligibility (a recently-flipped size may not burst) and the flap quarantine
+     * (a size that flipped back within the cooldown window has its restocks muted for a longer
+     * stretch). In-memory only; a restart just re-accumulates. Only maintained when
+     * {@code zara.monitor.anti-flap-cooldown-ticks} > 0.
+     */
+    private final Map<String, Map<String, FlipRecord>> flipHistory = new ConcurrentHashMap<>();
+
+    /**
+     * Monotonic tick counter (bumped once per {@link #monitor()} call) — the time base for the
+     * anti-flap cooldown and quarantine, which reason in ticks (≈ periods) rather than wall-clock so
+     * they stay deterministic and clock-free.
+     */
+    private long tick;
+
     private static final class Pending {
         private final boolean value;
         private int count;
@@ -76,6 +92,17 @@ public class MonitoringScheduler {
             this.value = value;
             this.count = 1;
         }
+    }
+
+    /**
+     * One size's anti-flap state: the last committed availability and the tick it committed on (for
+     * the cooldown / flap-detection window), plus the tick until which the size is quarantined as a
+     * known flapper (its restocks muted while {@code tick < quarantinedUntilTick}).
+     */
+    private static final class FlipRecord {
+        private boolean lastValue;
+        private long lastCommitTick;
+        private long quarantinedUntilTick;
     }
 
     /**
@@ -109,11 +136,13 @@ public class MonitoringScheduler {
         this.lastKnown.keySet().retainAll(productKeys);
         this.lastKnownPrice.keySet().retainAll(productKeys);
         this.pendingFlips.keySet().retainAll(productKeys);
+        this.flipHistory.keySet().retainAll(productKeys);
         if (productKeys.isEmpty()) {
             log.info("No subscriptions found, nothing to monitor.");
             return;
         }
 
+        this.tick++;
         final var startedAt = System.currentTimeMillis();
         final var reports = new LinkedHashMap<Long, List<NotifyEvent>>();
         final var burstBudget = new AtomicInteger(this.properties.getMonitor().getBurstConfirmMaxPerTick());
@@ -193,6 +222,7 @@ public class MonitoringScheduler {
             watchedSizes.add(watch.size());
         }
         confirmRestockViaSelenium(productKey, ref.link(), appeared, current, watchedSizes);
+        suppressQuarantinedRestocks(productKey, appeared, current);
 
         collectPriceChangeIfMoved(productKey, ref, price, watches, reports);
 
@@ -206,6 +236,8 @@ public class MonitoringScheduler {
                 collectSizeSoldOut(watch.chatId(), productKey, ref, watch.size(), previous, current, reports);
             }
         }
+
+        recordFlips(productKey, previous, current);
 
         this.lastKnown.put(productKey, current);
         this.subscriptionService.recordCheck(productKey, current);
@@ -347,12 +379,118 @@ public class MonitoringScheduler {
         }
         for (final var watch : watches) {
             for (final var entry : pending.entrySet()) {
-                if (entry.getValue().value && equalsSize(entry.getKey(), watch.size())) {
+                if (entry.getValue().value && equalsSize(entry.getKey(), watch.size())
+                        && !burstSuppressed(productKey, entry.getKey())) {
                     return true;
                 }
             }
         }
         return false;
+    }
+
+    /**
+     * Anti-flap: a size is barred from burst-confirm while it is inside the cooldown window after its
+     * last committed flip, or while it is quarantined as a known flapper. In both cases its next
+     * restock must earn the independent cross-tick confirmation rather than an immediate re-scrape
+     * that would only echo the same stale CDN edge. Disabled (never suppresses) when the cooldown is 0.
+     */
+    private boolean burstSuppressed(final String productKey, final String size) {
+        final var cooldown = this.properties.getMonitor().getAntiFlapCooldownTicks();
+        if (cooldown <= 0) {
+            return false;
+        }
+        final var record = flipRecord(productKey, size);
+        if (record == null) {
+            return false;
+        }
+        if (this.tick < record.quarantinedUntilTick) {
+            return true;
+        }
+        return this.tick - record.lastCommitTick < cooldown;
+    }
+
+    /**
+     * Mutes a restock for any just-appeared size that is currently quarantined as a flapper: reverts
+     * the flip in {@code confirmed} back to OOS and drops it from {@code appeared}, so no false
+     * "appeared" fires and — since the state stays OOS — no mirroring sold-out follows next tick. A
+     * quarantined size only re-alerts once its quarantine has elapsed and it commits a fresh restock.
+     * No-op when anti-flap is disabled or nothing appeared.
+     */
+    private void suppressQuarantinedRestocks(
+            final String productKey, final Set<String> appeared, final Map<String, Boolean> confirmed) {
+        if (this.properties.getMonitor().getAntiFlapCooldownTicks() <= 0 || appeared.isEmpty()) {
+            return;
+        }
+        final var quarantined = new ArrayList<String>();
+        for (final var size : appeared) {
+            final var record = flipRecord(productKey, size);
+            if (record != null && this.tick < record.quarantinedUntilTick) {
+                quarantined.add(size);
+            }
+        }
+        for (final var size : quarantined) {
+            confirmed.put(size, false);
+            appeared.remove(size);
+            log.info("MON [{}] size '{}' restock SUPPRESSED — size quarantined as a flapper until tick {}.",
+                    productKey, size, flipRecord(productKey, size).quarantinedUntilTick);
+        }
+    }
+
+    /**
+     * Records every availability flip committed this tick (the final, post-suppression previous →
+     * current transition) into {@link #flipHistory}, and when a size flips back to its opposite state
+     * within the cooldown window quarantines it as a flapper (so {@link #suppressQuarantinedRestocks}
+     * mutes its later restocks). Running on the post-suppression state means a reverted flip leaves no
+     * trace. No-op when anti-flap is disabled.
+     */
+    private void recordFlips(
+            final String productKey, final Map<String, Boolean> previous, final Map<String, Boolean> current) {
+        final var cooldown = this.properties.getMonitor().getAntiFlapCooldownTicks();
+        if (cooldown <= 0) {
+            return;
+        }
+        final var history = this.flipHistory.computeIfAbsent(productKey, k -> new HashMap<>());
+        for (final var entry : current.entrySet()) {
+            final var size = entry.getKey();
+            if (WHOLE.getSize().equals(size)) {
+                continue;
+            }
+            final var now = TRUE.equals(entry.getValue());
+            if (now == availability(previous, size)) {
+                continue;
+            }
+            final var record = history.computeIfAbsent(size, k -> new FlipRecord());
+            final var hasPrior = record.lastCommitTick > 0;
+            if (hasPrior && record.lastValue != now && this.tick - record.lastCommitTick <= cooldown) {
+                record.quarantinedUntilTick = this.tick + this.properties.getMonitor().getFlapQuarantineTicks();
+                log.info("MON [{}] size '{}' FLAP detected ({} → {} within {} tick(s)) — "
+                                + "quarantining restocks until tick {}.",
+                        productKey, size, avail(!now), avail(now),
+                        this.tick - record.lastCommitTick, record.quarantinedUntilTick);
+            }
+            record.lastValue = now;
+            record.lastCommitTick = this.tick;
+        }
+    }
+
+    /**
+     * Fuzzy lookup of a size's anti-flap record ("EU40" matches a record stored under "40").
+     */
+    private FlipRecord flipRecord(final String productKey, final String size) {
+        final var history = this.flipHistory.get(productKey);
+        if (history == null) {
+            return null;
+        }
+        final var direct = history.get(size);
+        if (direct != null) {
+            return direct;
+        }
+        for (final var entry : history.entrySet()) {
+            if (equalsSize(entry.getKey(), size)) {
+                return entry.getValue();
+            }
+        }
+        return null;
     }
 
     private boolean sleep(final long ms) {

@@ -86,6 +86,19 @@ class MonitoringSchedulerTest {
         return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props);
     }
 
+    private MonitoringScheduler antiFlapScheduler(
+            final int confirmations, final int cooldownTicks, final int quarantineTicks) {
+        final var props = new ZaraProperties();
+        props.getMonitor().setConfirmations(confirmations);
+        props.getMonitor().setConfirmRestockViaSelenium(false);
+        props.getMonitor().setBurstConfirm(true);
+        props.getMonitor().setBurstConfirmDelayMs(0);
+        props.getMonitor().setBurstConfirmMaxPerTick(3);
+        props.getMonitor().setAntiFlapCooldownTicks(cooldownTicks);
+        props.getMonitor().setFlapQuarantineTicks(quarantineTicks);
+        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props);
+    }
+
     private static Watch watch(final long chatId, final String size, final com.ibdev.bot.zara.storage.model.SubscriptionMode mode) {
         return new Watch(chatId, size, mode);
     }
@@ -889,5 +902,83 @@ class MonitoringSchedulerTest {
         scheduler.monitor();
 
         verifyNoInteractions(pageService, telegramBot);
+    }
+
+    /**
+     * Anti-flap must stay opt-in: the quarantine can mute a genuine rapid restock, so — like
+     * {@code confirmRestockViaSelenium} — it is off unless deliberately enabled. Guards the default.
+     */
+    @Test
+    void antiFlapIsOffByDefault() {
+        assertThat(new ZaraProperties().getMonitor().getAntiFlapCooldownTicks()).isZero();
+    }
+
+    /**
+     * The core spam fix. A genuinely-OOS product whose API flickers in-stock for a few seconds gets
+     * one false appeared/sold-out pair (unavoidable — the first flicker looks like a real restock),
+     * then the flap is detected (the sold-out reverses the appeared within the cooldown window) and
+     * the size is quarantined: every later in-stock flicker is barred from burst-confirm and, even if
+     * it slips through the cross-tick debounce, its restock is reverted and never notified. So the
+     * user gets exactly two messages, not the endless SOLD_OUT↔APPEARED oscillation from the log.
+     * <p>
+     * Sequence (burst re-scrapes consume a snapshot too): t1 in-stock ×2 → burst APPEARED; t2/t3
+     * out-of-stock → cross-tick SOLD_OUT + flap detected; t4/t5 the flicker returns in-stock but the
+     * size is quarantined, so nothing more fires.
+     */
+    @Test
+    void flapQuarantineSilencesOscillationAfterTheFirstPair() {
+        scheduler = antiFlapScheduler(2, 3, 5);
+        seed(Map.of("S", false));
+        stubProductSequence(List.of(watch(1L, "S", AWAIT_RESTOCK)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", false, "*", false)),
+                snap(Map.of("S", false, "*", false)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", false, "*", false)));
+
+        scheduler.monitor();
+        scheduler.monitor();
+        scheduler.monitor();
+        scheduler.monitor();
+        scheduler.monitor();
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(2);
+        assertThat(textOf(messages.get(0))).contains("Размер S", "появился");
+        assertThat(textOf(messages.get(1))).contains("Размер S", "пропал");
+    }
+
+    /**
+     * Quarantine is a timed mute, not a permanent one: once it elapses, a genuine restock alerts
+     * again. With cooldown/quarantine of 2 ticks, the flap at t1–t3 quarantines S until t5; a stable
+     * restock from t6 onward must produce a fresh "appeared".
+     */
+    @Test
+    void sizeRecoversFromQuarantineAndAlertsAGenuineRestock() {
+        scheduler = antiFlapScheduler(2, 2, 2);
+        seed(Map.of("S", false));
+        stubProductSequence(List.of(watch(1L, "S", AWAIT_RESTOCK)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", false, "*", false)),
+                snap(Map.of("S", false, "*", false)),
+                snap(Map.of("S", false, "*", false)),
+                snap(Map.of("S", false, "*", false)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", true, "*", true)));
+
+        for (int i = 0; i < 8; i++) {
+            scheduler.monitor();
+        }
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(3);
+        assertThat(textOf(messages.get(0))).contains("Размер S", "появился");
+        assertThat(textOf(messages.get(1))).contains("Размер S", "пропал");
+        assertThat(textOf(messages.get(2))).contains("Размер S", "появился");
     }
 }

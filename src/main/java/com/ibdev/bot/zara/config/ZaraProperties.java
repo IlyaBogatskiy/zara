@@ -106,5 +106,30 @@ public class ZaraProperties {
          * "everything changed at once" tick cannot balloon; the rest confirm via the normal debounce.
          */
         private int burstConfirmMaxPerTick = 3;
+
+        /**
+         * Anti-flap cooldown, in ticks (≈ periods). Once a size's availability commits a flip, it is
+         * barred from {@link #burstConfirm} for this many subsequent ticks — its next flip must earn
+         * the independent cross-tick debounce, not an immediate (same-CDN-edge) re-scrape. The same
+         * window is the flap-detection window: an opposite flip committed within it marks the size as a
+         * flapper and quarantines it (see {@link #flapQuarantineTicks}).
+         * <p>
+         * <b>0 disables the whole anti-flap machinery</b> (leaving pure debounce + burst-confirm) —
+         * the default, opt-in like {@link #confirmRestockViaSelenium}, because a quarantine can also
+         * mute a <em>genuine</em> rapid restock. It fixes the residual flap where a genuinely-OOS
+         * product's API reading flickers in-stock for a few seconds: the burst re-scrape
+         * ({@code burstConfirmDelayMs} later) echoes the same stale edge and commits a false restock,
+         * which the next tick reverts — SOLD_OUT/APPEARED oscillating every ~1-2 periods.
+         */
+        private int antiFlapCooldownTicks = 0;
+
+        /**
+         * How many ticks (≈ periods) a size stays quarantined once detected as a flapper: while
+         * quarantined its restocks are muted (reverted, no alert), so a genuinely-OOS product that
+         * keeps flickering in-stock produces at most one false appeared/sold-out pair, then goes
+         * quiet. Only consulted when {@link #antiFlapCooldownTicks} > 0. After it elapses a fresh
+         * genuine restock alerts normally again.
+         */
+        private int flapQuarantineTicks = 60;
     }
 }
