@@ -50,6 +50,7 @@ public class UserNotifier {
     private static final int BUTTON_NAME_HINT_LENGTH = 16;
 
     private final TelegramBot telegramBot;
+    private final AdminNotifier adminNotifier;
 
     /**
      * Sends one consolidated report to a chat for everything that changed this tick.
@@ -174,6 +175,7 @@ public class UserNotifier {
                 response = this.telegramBot.execute(message);
             } catch (final Exception e) {
                 log.warn("Telegram send to chat {} threw: {}", chatId, e.getMessage());
+                reportDeliveryFailure(chatId, "исключение: " + e.getMessage());
                 return;
             }
 
@@ -194,9 +196,21 @@ public class UserNotifier {
             }
 
             log.warn("Telegram send to chat {} failed: {} {}", chatId, response.errorCode(), response.description());
+            reportDeliveryFailure(chatId, response.errorCode() + " " + response.description());
             return;
         }
         log.warn("Telegram send to chat {} giving up after {} attempts.", chatId, MAX_SEND_ATTEMPTS);
+        reportDeliveryFailure(chatId, "rate-limit 429, сдался после " + MAX_SEND_ATTEMPTS + " попыток");
+    }
+
+    /**
+     * A user report that could not be delivered is a silent loss — the user never learns a size came
+     * back. Escalate to the admin chat (throttled by {@link AdminNotifier} under one key, so a
+     * Telegram-wide outage is one alert, not one per chat).
+     */
+    private void reportDeliveryFailure(final long chatId, final String reason) {
+        this.adminNotifier.alert("delivery-failed",
+                "📵 Не удалось доставить оповещение в чат " + chatId + ": " + reason);
     }
 
     private boolean sleep(final long ms) {
