@@ -38,6 +38,20 @@ public class ZaraProperties {
          * The fast JSON path (products-details). false — everything goes through Selenium.
          */
         private boolean enabled = true;
+
+        /**
+         * API-degradation watchdog: the size of the sliding window of recent API attempts over which
+         * the fallback-to-Selenium rate is measured. When the rate exceeds {@link #degradedThreshold}
+         * the admin chat is alerted (throttled) — an early sign Akamai is tightening and the bot is
+         * limping on the slow Selenium path. 0 disables the watchdog.
+         */
+        private int degradedWindow = 20;
+
+        /**
+         * Fraction (0..1) of the window that must have fallen back to Selenium before the degradation
+         * alert fires.
+         */
+        private double degradedThreshold = 0.5;
     }
 
     @Getter

@@ -27,6 +27,7 @@ public class PageServiceImpl implements PageService {
     private final ZaraApiClient zaraApiClient;
     private final ZaraProperties properties;
     private final AdminNotifier adminNotifier;
+    private final ApiHealthTracker apiHealthTracker;
 
     @Override
     public ProductCard loadProductCard(final String link) {
@@ -34,12 +35,14 @@ public class PageServiceImpl implements PageService {
             try {
                 final var viaApi = this.zaraApiClient.loadProductCard(link);
                 if (viaApi != null) {
+                    this.apiHealthTracker.recordApiOutcome(true);
                     return viaApi;
                 }
                 log.info("Zara API gave no card for {}, falling back to Selenium.", link);
             } catch (final Exception e) {
                 log.warn("Zara API card load failed for {} ({}), falling back to Selenium.", link, e.getMessage());
             }
+            this.apiHealthTracker.recordApiOutcome(false);
         }
 
         final var driver = webDriverFactory.create();
@@ -63,12 +66,14 @@ public class PageServiceImpl implements PageService {
             try {
                 final var viaApi = this.zaraApiClient.checkSizesAvailability(link);
                 if (viaApi != null && viaApi.sizes() != null && !viaApi.sizes().isEmpty()) {
+                    this.apiHealthTracker.recordApiOutcome(true);
                     return viaApi;
                 }
                 log.info("Zara API gave no data for {}, falling back to Selenium.", link);
             } catch (final Exception e) {
                 log.warn("Zara API check failed for {} ({}), falling back to Selenium.", link, e.getMessage());
             }
+            this.apiHealthTracker.recordApiOutcome(false);
         }
 
         return checkViaSelenium(link);

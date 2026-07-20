@@ -17,6 +17,8 @@ zara:
     slow-tick-alert-ms: 15000        # alert admin (throttled) when a single tick exceeds this — usually a blocking Selenium fallback; 0 disables
   api:
     enabled: true       # fast JSON path; false — Selenium only
+    degraded-window: 20      # sliding window of recent API attempts for the degradation watchdog; 0 disables
+    degraded-threshold: 0.5  # fallback-to-Selenium rate over the window that triggers an admin alert
   driver:
     wait-seconds: 15
     remote-url: ${ZARA_DRIVER_REMOTE_URL:}   # Selenium Grid URL; blank = local ChromeDriver
