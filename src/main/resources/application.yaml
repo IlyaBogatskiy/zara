@@ -26,6 +26,10 @@ zara:
     enabled: true       # periodic Selenium-vs-API cross-check
     initial-delay-ms: 600000   # first run 10 minutes after startup
     period-ms: 21600000        # then every 6 hours
+  activity-summary:
+    enabled: true            # daily "how the bot lived" report to the admin chat (footprint + event counts)
+    cron: "0 0 9 * * *"      # 09:00 daily
+    zone: ""                 # blank = JVM default zone
   log-digest:
     enabled: true            # collect WARN/ERROR all day, send once daily to the admin chat (nothing on a clean day)
     cron: "0 55 23 * * *"    # 23:55 daily — end of day

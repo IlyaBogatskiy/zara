@@ -51,6 +51,7 @@ public class UserNotifier {
 
     private final TelegramBot telegramBot;
     private final AdminNotifier adminNotifier;
+    private final ActivityStats activityStats;
 
     /**
      * Sends one consolidated report to a chat for everything that changed this tick.
@@ -80,6 +81,7 @@ public class UserNotifier {
                 text.append(link).append("\n");
             }
             for (final var event : group) {
+                this.activityStats.record(event);
                 text.append(renderLine(event)).append("\n");
                 hasButtons |= appendButtons(keyboard, event, name);
             }

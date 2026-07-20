@@ -30,6 +30,7 @@ public class ZaraProperties {
     private final Canary canary = new Canary();
     private final Monitor monitor = new Monitor();
     private final LogDigest logDigest = new LogDigest();
+    private final ActivitySummary activitySummary = new ActivitySummary();
 
     @Getter
     @Setter
@@ -188,5 +189,25 @@ public class ZaraProperties {
          * count is reported at the top of the digest). Bounds memory between flushes.
          */
         private int maxEntries = 5000;
+    }
+
+    @Getter
+    @Setter
+    public static class ActivitySummary {
+        /**
+         * Daily "how the bot lived" report to the admin chat: monitoring footprint + the day's event
+         * counts (appeared/sold-out/price/whole). Always sent — it is the report, not an alert.
+         */
+        private boolean enabled = true;
+
+        /**
+         * When the summary is sent (Spring cron). Default: 09:00 daily.
+         */
+        private String cron = "0 0 9 * * *";
+
+        /**
+         * Time zone for the cron. Blank = the JVM default zone.
+         */
+        private String zone = "";
     }
 }

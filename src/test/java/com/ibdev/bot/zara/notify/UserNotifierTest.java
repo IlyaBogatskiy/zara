@@ -30,7 +30,7 @@ class UserNotifierTest {
 
     @BeforeEach
     void setUp() {
-        notifier = new UserNotifier(telegramBot, adminNotifier);
+        notifier = new UserNotifier(telegramBot, adminNotifier, new ActivityStats());
     }
 
     private List<NotifyEvent> oneAppeared() {
