@@ -88,7 +88,7 @@ Redesigned 2026-06 (see `docs/CACHE_REDESIGN.md` for rationale). Direct synchron
 
 - **Secrets are committed in plaintext** in `application.yaml`: a live-looking Telegram bot token and the Postgres credentials. Rotate the token and externalize both (env vars / Spring config import) before any real deployment.
 - `spring.jpa.hibernate.ddl-auto: update` auto-mutates the schema on startup — fine for dev, unsafe for prod (use `validate`/`none`).
-- SQL logging is at `DEBUG`/`TRACE` (logs every statement and bound parameter) — very verbose and leaks data values; lower it for prod.
+- SQL logging (`org.hibernate.SQL`, `org.hibernate.orm.jdbc.bind`) is at `WARN` — a 2026-07 log capture was 99.8% Hibernate SQL (statements ~70%, bound-parameter values ~25%, the latter leaking chat ids/keys). Raise `org.hibernate.SQL` to `debug` locally to see queries; keep `bind` off in prod.
 - Caffeine is used **directly** (`ProductCardCache`, `SessionCache`), not via the Spring Cache abstraction — no `@EnableCaching`/`@Cacheable` anywhere, by design (see `docs/CACHE_REDESIGN.md` §4.5).
 - There is **no WebDriverManager dependency** — `new ChromeDriver(...)` relies on a system-installed Chrome + a chromedriver discoverable on PATH (or via Selenium Manager).
 - Tests (none need Chrome):

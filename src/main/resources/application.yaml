@@ -58,5 +58,5 @@ spring:
 
 logging:
   level:
-    org.hibernate.SQL: debug
-    org.hibernate.orm.jdbc.bind: trace
+    org.hibernate.SQL: warn                # was debug — SQL statement logging is ~70% of log volume; raise to debug locally to see queries
+    org.hibernate.orm.jdbc.bind: warn      # was trace — bound-parameter values are ~25% of volume and leak data (chat ids, keys); keep off in prod
