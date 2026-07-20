@@ -1025,6 +1025,27 @@ class MonitoringSchedulerTest {
     }
 
     /**
+     * When a flap is detected and the size quarantined, the admin chat is pinged (throttled per
+     * product+size) so the operator knows which product is flickering — not just silence.
+     */
+    @Test
+    void alertsAdminWhenASizeIsQuarantinedAsAFlapper() {
+        scheduler = antiFlapScheduler(2, 3, 5);
+        seed(Map.of("S", false));
+        stubProductSequence(List.of(watch(1L, "S", AWAIT_RESTOCK)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", true, "*", true)),
+                snap(Map.of("S", false, "*", false)),
+                snap(Map.of("S", false, "*", false)));
+
+        scheduler.monitor();
+        scheduler.monitor();
+        scheduler.monitor();
+
+        verify(adminNotifier).alert(eq("flap:" + KEY + ":S"), any());
+    }
+
+    /**
      * Quarantine is a timed mute, not a permanent one: once it elapses, a genuine restock alerts
      * again. With cooldown/quarantine of 2 ticks, the flap at t1–t3 quarantines S until t5; a stable
      * restock from t6 onward must produce a fresh "appeared".

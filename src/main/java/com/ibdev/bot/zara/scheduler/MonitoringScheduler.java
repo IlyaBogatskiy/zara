@@ -290,7 +290,7 @@ public class MonitoringScheduler {
             }
         }
 
-        recordFlips(productKey, previous, current);
+        recordFlips(productKey, ref.name(), previous, current);
 
         this.lastKnown.put(productKey, current);
         this.subscriptionService.recordCheck(productKey, current);
@@ -497,7 +497,8 @@ public class MonitoringScheduler {
      * trace. No-op when anti-flap is disabled.
      */
     private void recordFlips(
-            final String productKey, final Map<String, Boolean> previous, final Map<String, Boolean> current) {
+            final String productKey, final String productName,
+            final Map<String, Boolean> previous, final Map<String, Boolean> current) {
         final var cooldown = this.properties.getMonitor().getAntiFlapCooldownTicks();
         if (cooldown <= 0) {
             return;
@@ -515,11 +516,15 @@ public class MonitoringScheduler {
             final var record = history.computeIfAbsent(size, k -> new FlipRecord());
             final var hasPrior = record.lastCommitTick > 0;
             if (hasPrior && record.lastValue != now && this.tick - record.lastCommitTick <= cooldown) {
-                record.quarantinedUntilTick = this.tick + this.properties.getMonitor().getFlapQuarantineTicks();
+                final var quarantineTicks = this.properties.getMonitor().getFlapQuarantineTicks();
+                record.quarantinedUntilTick = this.tick + quarantineTicks;
                 log.info("MON [{}] size '{}' FLAP detected ({} → {} within {} tick(s)) — "
                                 + "quarantining restocks until tick {}.",
                         productKey, size, avail(!now), avail(now),
                         this.tick - record.lastCommitTick, record.quarantinedUntilTick);
+                this.adminNotifier.alert("flap:" + productKey + ":" + size, String.format(
+                        "🌀 Флап: «%s» размер %s мигает наличием — рестоки в карантине на %d тик(ов).",
+                        productName, size, quarantineTicks));
             }
             record.lastValue = now;
             record.lastCommitTick = this.tick;
