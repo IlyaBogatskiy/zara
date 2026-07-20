@@ -3,6 +3,7 @@ package com.ibdev.bot.zara.scheduler;
 import com.ibdev.bot.zara.client.PriceInfo;
 import com.ibdev.bot.zara.client.ProductSnapshot;
 import com.ibdev.bot.zara.config.ZaraProperties;
+import com.ibdev.bot.zara.notify.AdminNotifier;
 import com.ibdev.bot.zara.notify.UserNotifier;
 import com.ibdev.bot.zara.service.page.PageService;
 import com.ibdev.bot.zara.service.subscription.SubscriptionService;
@@ -57,6 +58,9 @@ class MonitoringSchedulerTest {
     @Mock
     private TelegramBot telegramBot;
 
+    @Mock
+    private AdminNotifier adminNotifier;
+
     private MonitoringScheduler scheduler;
 
     /**
@@ -73,7 +77,7 @@ class MonitoringSchedulerTest {
         props.getMonitor().setConfirmations(confirmations);
         props.getMonitor().setConfirmRestockViaSelenium(confirmViaSelenium);
         props.getMonitor().setBurstConfirm(false);
-        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props);
+        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props, adminNotifier);
     }
 
     private MonitoringScheduler burstScheduler(final int confirmations, final int maxPerTick) {
@@ -83,7 +87,7 @@ class MonitoringSchedulerTest {
         props.getMonitor().setBurstConfirm(true);
         props.getMonitor().setBurstConfirmDelayMs(0);
         props.getMonitor().setBurstConfirmMaxPerTick(maxPerTick);
-        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props);
+        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props, adminNotifier);
     }
 
     private MonitoringScheduler antiFlapScheduler(
@@ -96,7 +100,16 @@ class MonitoringSchedulerTest {
         props.getMonitor().setBurstConfirmMaxPerTick(3);
         props.getMonitor().setAntiFlapCooldownTicks(cooldownTicks);
         props.getMonitor().setFlapQuarantineTicks(quarantineTicks);
-        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props);
+        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props, adminNotifier);
+    }
+
+    private MonitoringScheduler watchdogScheduler(final long stallAlertMs, final long slowTickAlertMs) {
+        final var props = new ZaraProperties();
+        props.getMonitor().setConfirmations(1);
+        props.getMonitor().setBurstConfirm(false);
+        props.getMonitor().setStallAlertMs(stallAlertMs);
+        props.getMonitor().setSlowTickAlertMs(slowTickAlertMs);
+        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot), props, adminNotifier);
     }
 
     private static Watch watch(final long chatId, final String size, final com.ibdev.bot.zara.storage.model.SubscriptionMode mode) {
@@ -902,6 +915,67 @@ class MonitoringSchedulerTest {
         scheduler.monitor();
 
         verifyNoInteractions(pageService, telegramBot);
+    }
+
+    /**
+     * A single tick that runs longer than the slow-tick threshold (here forced by a scrape that
+     * sleeps past it) alerts the admin — the signature of a synchronous Selenium fallback blocking
+     * the single-threaded scheduler.
+     */
+    @Test
+    void alertsAdminWhenATickIsSlow() {
+        scheduler = watchdogScheduler(600_000, 50);
+        when(subscriptionService.activeProductKeys()).thenReturn(Set.of(KEY));
+        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
+        when(subscriptionService.getActiveWatches(KEY)).thenReturn(List.of(watch(1L, "S", AWAIT_RESTOCK)));
+        when(pageService.checkProductSizesAvailability(LINK)).thenAnswer(invocation -> {
+            Thread.sleep(120);
+            return new ProductSnapshot(Map.of("S", false, "*", false), null);
+        });
+
+        scheduler.monitor();
+
+        verify(adminNotifier).alert(eq("slow-tick"), any());
+    }
+
+    @Test
+    void doesNotAlertSlowTickForAFastTick() {
+        scheduler = watchdogScheduler(600_000, 50);
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", false, "*", false), null);
+
+        scheduler.monitor();
+
+        verify(adminNotifier, never()).alert(eq("slow-tick"), any());
+    }
+
+    /**
+     * When ticks resume after a gap longer than the stall threshold (the host was suspended / the
+     * container paused), the resuming tick reports the outage window to the admin. Simulated with a
+     * tiny threshold and a real pause between two ticks; the first tick must never trip it.
+     */
+    @Test
+    void alertsAdminWhenMonitoringResumesAfterAGap() throws InterruptedException {
+        scheduler = watchdogScheduler(1, 600_000);
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", false, "*", false), null);
+
+        scheduler.monitor();
+        verify(adminNotifier, never()).alert(eq("monitoring-gap"), any());
+
+        Thread.sleep(15);
+        scheduler.monitor();
+
+        verify(adminNotifier).alert(eq("monitoring-gap"), any());
+    }
+
+    @Test
+    void doesNotAlertGapOnNormalCadence() {
+        scheduler = watchdogScheduler(600_000, 600_000);
+        stubProduct(List.of(watch(1L, "S", AWAIT_RESTOCK)), Map.of("S", false, "*", false), null);
+
+        scheduler.monitor();
+        scheduler.monitor();
+
+        verify(adminNotifier, never()).alert(eq("monitoring-gap"), any());
     }
 
     /**

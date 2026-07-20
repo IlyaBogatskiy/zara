@@ -13,6 +13,8 @@ zara:
     burst-confirm-max-per-tick: 3    # cap burst re-scrapes per tick; the rest fall back to cross-tick debounce
     anti-flap-cooldown-ticks: 3      # after a size flips, bar it from burst for N ticks; an opposite flip within N ticks = a flap -> quarantine (0 disables anti-flap)
     flap-quarantine-ticks: 60        # once flapping, mute a size's restocks for N ticks (~30 min at 30s period) -> at most one false pair, then quiet
+    stall-alert-ms: 300000           # resuming tick alerts admin if the gap since the last tick exceeds this (~monitoring outage); 0 disables
+    slow-tick-alert-ms: 15000        # alert admin (throttled) when a single tick exceeds this — usually a blocking Selenium fallback; 0 disables
   api:
     enabled: true       # fast JSON path; false — Selenium only
   driver:
@@ -22,7 +24,12 @@ zara:
     enabled: true       # periodic Selenium-vs-API cross-check
     initial-delay-ms: 600000   # first run 10 minutes after startup
     period-ms: 21600000        # then every 6 hours
-  admin-chat-id: ${ZARA_ADMIN_CHAT_ID:0}   # operator chatId for alerts; 0 = log only
+  log-digest:
+    enabled: true            # collect WARN/ERROR all day, send once daily to the admin chat (nothing on a clean day)
+    cron: "0 55 23 * * *"    # 23:55 daily — end of day
+    zone: ""                 # blank = JVM default zone
+    max-entries: 5000        # ring-buffer cap; older WARN/ERROR dropped (count reported in the digest)
+  admin-chat-id: ${ZARA_ADMIN_CHAT_ID:0}   # operator chatId for alerts + daily log digest; 0 = log only
 ---
 spring:
   datasource:

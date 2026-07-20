@@ -2,6 +2,7 @@ package com.ibdev.bot.zara.telegram;
 
 import com.google.gson.Gson;
 import com.ibdev.bot.zara.cache.ProductCardCache;
+import com.ibdev.bot.zara.config.ZaraProperties;
 import com.ibdev.bot.zara.client.ProductCard;
 import com.ibdev.bot.zara.client.SizeInfo;
 import com.ibdev.bot.zara.service.subscription.SubscriptionService;
@@ -59,7 +60,8 @@ class ZaraTelegramListenerTest {
     @BeforeEach
     void captureListener() {
         final var bot = new ZaraTelegramListener(
-                sessionCache, telegramBot, productCardCache, subscriptionService, scrapingExecutor
+                sessionCache, telegramBot, productCardCache, subscriptionService, scrapingExecutor,
+                new AdminCommandHandler(subscriptionService, new ZaraProperties())
         );
         bot.init();
 

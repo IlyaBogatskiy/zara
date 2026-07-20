@@ -50,4 +50,25 @@ public class AdminNotifier {
             log.error("Failed to deliver admin alert: {}", e.getMessage());
         }
     }
+
+    /**
+     * A one-off operational notice (startup, shutdown, a detected outage) — sent every time, with no
+     * per-key 6 h throttle, because these are rare intentional events you always want delivered (and a
+     * flood of them, e.g. from a crash loop, is itself the signal). Still logs and still no-ops when
+     * no admin chat is configured.
+     */
+    public void notice(final String message) {
+        log.info("ADMIN NOTICE: {}", message);
+
+        final var adminChatId = this.properties.getAdminChatId();
+        if (adminChatId == null || adminChatId == 0) {
+            return;
+        }
+
+        try {
+            this.telegramBot.execute(new SendMessage(adminChatId, message));
+        } catch (final Exception e) {
+            log.error("Failed to deliver admin notice: {}", e.getMessage());
+        }
+    }
 }

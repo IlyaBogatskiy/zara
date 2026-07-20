@@ -3,6 +3,7 @@ package com.ibdev.bot.zara.scheduler;
 import com.ibdev.bot.zara.client.PriceInfo;
 import com.ibdev.bot.zara.client.ProductSnapshot;
 import com.ibdev.bot.zara.config.ZaraProperties;
+import com.ibdev.bot.zara.notify.AdminNotifier;
 import com.ibdev.bot.zara.notify.NotifyEvent;
 import com.ibdev.bot.zara.notify.UserNotifier;
 import com.ibdev.bot.zara.service.page.PageService;
@@ -45,6 +46,15 @@ public class MonitoringScheduler {
     private final PageService pageService;
     private final UserNotifier userNotifier;
     private final ZaraProperties properties;
+    private final AdminNotifier adminNotifier;
+
+    /**
+     * Wall-clock end of the previous completed tick, for the outage watchdog. 0 = no tick yet. A
+     * resuming tick whose gap since this exceeds {@code zara.monitor.stall-alert-ms} reports the
+     * outage window (during which stock changes were missed). Single-threaded scheduler, so this is
+     * only ever read/written on the scheduling thread.
+     */
+    private long lastTickCompletedAt;
 
     /**
      * Last <em>confirmed</em> size availability: productKey → (size → inStock).
@@ -144,6 +154,7 @@ public class MonitoringScheduler {
 
         this.tick++;
         final var startedAt = System.currentTimeMillis();
+        alertOnMonitoringGap(startedAt);
         final var reports = new LinkedHashMap<Long, List<NotifyEvent>>();
         final var burstBudget = new AtomicInteger(this.properties.getMonitor().getBurstConfirmMaxPerTick());
         for (final var productKey : productKeys) {
@@ -162,8 +173,50 @@ public class MonitoringScheduler {
             }
         }
 
+        final var finishedAt = System.currentTimeMillis();
+        final var durationMs = finishedAt - startedAt;
         log.info("Monitoring tick finished: {} product(s), {} chat report(s) in {} ms.",
-                productKeys.size(), reports.size(), System.currentTimeMillis() - startedAt);
+                productKeys.size(), reports.size(), durationMs);
+        alertOnSlowTick(durationMs);
+        this.lastTickCompletedAt = finishedAt;
+    }
+
+    /**
+     * Outage watchdog: a resuming tick whose gap since the previous completed tick exceeds
+     * {@code stall-alert-ms} reports the window during which monitoring was down and stock changes
+     * were missed (host suspend, container pause). Detected on resume — a full freeze suspends every
+     * thread, so there is nothing to detect it while it lasts. Skipped on the first tick after boot.
+     */
+    private void alertOnMonitoringGap(final long startedAt) {
+        final var threshold = this.properties.getMonitor().getStallAlertMs();
+        if (threshold <= 0 || this.lastTickCompletedAt == 0) {
+            return;
+        }
+        final var gapMs = startedAt - this.lastTickCompletedAt;
+        if (gapMs > threshold) {
+            log.warn("MON monitoring gap: no tick completed for {} ms — stock changes in that window were missed.",
+                    gapMs);
+            this.adminNotifier.alert("monitoring-gap", String.format(
+                    "⚠️ Мониторинг простаивал %d мин — изменения наличия за это окно пропущены.",
+                    Math.round(gapMs / 60000.0)));
+        }
+    }
+
+    /**
+     * Alerts (throttled) when a tick ran longer than {@code slow-tick-alert-ms} — almost always a
+     * synchronous Selenium fallback blocking the single-threaded scheduler, which stalls monitoring
+     * of every product for the duration.
+     */
+    private void alertOnSlowTick(final long durationMs) {
+        final var threshold = this.properties.getMonitor().getSlowTickAlertMs();
+        if (threshold <= 0 || durationMs <= threshold) {
+            return;
+        }
+        log.warn("MON slow tick: {} ms (threshold {} ms) — the scheduler was blocked, likely a Selenium fallback.",
+                durationMs, threshold);
+        this.adminNotifier.alert("slow-tick", String.format(
+                "🐢 Тик мониторинга занял %d с — планировщик подвисал (вероятно, синхронный Selenium-fallback).",
+                Math.round(durationMs / 1000.0)));
     }
 
     /**

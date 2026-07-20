@@ -58,6 +58,7 @@ public class ZaraTelegramListener {
     private final ProductCardCache productCardCache;
     private final SubscriptionService subscriptionService;
     private final ScrapingExecutor scrapingExecutor;
+    private final AdminCommandHandler adminCommandHandler;
 
     @PostConstruct
     public void init() {
@@ -94,6 +95,12 @@ public class ZaraTelegramListener {
 
 
     private void handleMessage(long chatId, String text) {
+        final var adminReply = this.adminCommandHandler.tryHandle(chatId, text);
+        if (adminReply.isPresent()) {
+            send(chatId, adminReply.get());
+            return;
+        }
+
         if (text.equalsIgnoreCase("📌 Подписки")) {
             openSubscriptionsMenu(chatId);
             return;

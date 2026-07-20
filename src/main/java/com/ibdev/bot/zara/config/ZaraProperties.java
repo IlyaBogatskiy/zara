@@ -29,6 +29,7 @@ public class ZaraProperties {
     private final Driver driver = new Driver();
     private final Canary canary = new Canary();
     private final Monitor monitor = new Monitor();
+    private final LogDigest logDigest = new LogDigest();
 
     @Getter
     @Setter
@@ -131,5 +132,47 @@ public class ZaraProperties {
          * genuine restock alerts normally again.
          */
         private int flapQuarantineTicks = 60;
+
+        /**
+         * Watchdog: if the gap since the previous completed tick exceeds this (ms), the resuming tick
+         * reports a monitoring outage to the admin chat — the window when stock changes were missed
+         * (e.g. the host was suspended). Set well above one period so normal jitter never trips it.
+         * 0 disables the gap alert.
+         */
+        private long stallAlertMs = 300_000;
+
+        /**
+         * If a single tick takes longer than this (ms) — almost always a synchronous Selenium fallback
+         * blocking the single-threaded scheduler — alert the admin chat (throttled). 0 disables it.
+         */
+        private long slowTickAlertMs = 15_000;
+    }
+
+    @Getter
+    @Setter
+    public static class LogDigest {
+        /**
+         * Daily WARN/ERROR digest: a bounded in-memory appender collects every log event at level
+         * WARN or above across all loggers, and a scheduled job flushes them once a day as a text
+         * file to the admin Telegram chat — so problems that were never surfaced by a dedicated alert
+         * still get seen. Nothing is sent on a clean day (no heartbeat).
+         */
+        private boolean enabled = true;
+
+        /**
+         * When the digest is flushed (Spring cron). Default: 23:55 daily — end of day.
+         */
+        private String cron = "0 55 23 * * *";
+
+        /**
+         * Time zone for the cron and for timestamps in the digest. Blank = the JVM default zone.
+         */
+        private String zone = "";
+
+        /**
+         * Ring-buffer cap: the newest N WARN/ERROR events are kept; older ones are dropped (their
+         * count is reported at the top of the digest). Bounds memory between flushes.
+         */
+        private int maxEntries = 5000;
     }
 }
