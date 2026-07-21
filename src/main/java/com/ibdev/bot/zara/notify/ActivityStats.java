@@ -4,6 +4,7 @@ import com.ibdev.bot.zara.notify.NotifyEvent.PriceMoved;
 import com.ibdev.bot.zara.notify.NotifyEvent.SizeAppeared;
 import com.ibdev.bot.zara.notify.NotifyEvent.SizeSoldOut;
 import com.ibdev.bot.zara.notify.NotifyEvent.WholeAvailable;
+import com.ibdev.bot.zara.notify.NotifyEvent.WholeUnavailable;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.atomic.AtomicLong;
@@ -32,12 +33,18 @@ public class ActivityStats {
         }
     }
 
+    /**
+     * A whole-product disappearance ({@link WholeUnavailable}) is tallied under {@code soldOut}: it is
+     * a sell-out at product level, so it belongs in the summary's "disappeared" bucket alongside size
+     * sell-outs rather than needing a counter of its own.
+     */
     public void record(final NotifyEvent event) {
         switch (event) {
             case SizeAppeared ignored -> this.appeared.incrementAndGet();
             case SizeSoldOut ignored -> this.soldOut.incrementAndGet();
             case PriceMoved ignored -> this.priceMoved.incrementAndGet();
             case WholeAvailable ignored -> this.wholeAvailable.incrementAndGet();
+            case WholeUnavailable ignored -> this.soldOut.incrementAndGet();
         }
     }
 

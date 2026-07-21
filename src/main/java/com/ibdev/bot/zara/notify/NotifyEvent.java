@@ -42,7 +42,8 @@ public sealed interface NotifyEvent {
 
     /**
      * A whole-product ("*") subscription's product became available. Offers a "keep monitoring the
-     * still-missing sizes" button when some sizes are still out of stock.
+     * still-missing sizes" button when some sizes are still out of stock. The "*" subscription is
+     * kept (not auto-removed), so the mirror {@link WholeUnavailable} can fire if it disappears again.
      */
     record WholeAvailable(
             String productKey,
@@ -51,5 +52,13 @@ public sealed interface NotifyEvent {
             Set<String> availableSizes,
             Set<String> unavailableSizes
     ) implements NotifyEvent {
+    }
+
+    /**
+     * A whole-product ("*") subscription's product went fully out of stock again (nothing buyable —
+     * every size out of stock or the "product unavailable" page). The mirror of {@link WholeAvailable};
+     * asks the user whether to keep watching ("continue") or stop.
+     */
+    record WholeUnavailable(String productKey, String productName, String link) implements NotifyEvent {
     }
 }

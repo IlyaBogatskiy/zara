@@ -4,6 +4,7 @@ import com.ibdev.bot.zara.notify.NotifyEvent.PriceMoved;
 import com.ibdev.bot.zara.notify.NotifyEvent.SizeAppeared;
 import com.ibdev.bot.zara.notify.NotifyEvent.SizeSoldOut;
 import com.ibdev.bot.zara.notify.NotifyEvent.WholeAvailable;
+import com.ibdev.bot.zara.notify.NotifyEvent.WholeUnavailable;
 import com.pengrad.telegrambot.TelegramBot;
 import com.pengrad.telegrambot.model.request.InlineKeyboardButton;
 import com.pengrad.telegrambot.model.request.InlineKeyboardMarkup;
@@ -29,6 +30,16 @@ public class UserNotifier {
      * The "keep monitoring missing sizes" button — handled by the telegram layer.
      */
     public static final String CB_WHOLE_KEEP_PREFIX = "WHOLE_KEEP:";
+
+    /**
+     * "product disappeared → keep watching the whole product" — payload: productKey.
+     */
+    public static final String CB_WHOLE_CONTINUE_PREFIX = "WHOLE_CONTINUE:";
+
+    /**
+     * "product disappeared → stop watching the whole product" — payload: productKey.
+     */
+    public static final String CB_WHOLE_STOP_PREFIX = "WHOLE_STOP:";
 
     /**
      * "size appeared → keep watching its price & availability" — payload: productKey:size.
@@ -103,6 +114,8 @@ public class UserNotifier {
                     ? "📉 Цена снизилась: " : "📈 Цена выросла: ")
                     + p.oldPrice().formatted() + " → " + p.newPrice().formatted();
             case WholeAvailable w -> renderWhole(w);
+            case WholeUnavailable ignored ->
+                    "❌ Товар снова полностью пропал из наличия. Продолжить отслеживать?";
         };
     }
 
@@ -111,12 +124,9 @@ public class UserNotifier {
         if (!w.availableSizes().isEmpty()) {
             sb.append("\n✅ Размеры в наличии: ").append(w.availableSizes());
         }
-        if (w.unavailableSizes().isEmpty()) {
-            sb.append("\nℹ️ Я остановил мониторинг товара.");
-        } else {
+        if (!w.unavailableSizes().isEmpty()) {
             sb.append("\n❌ Размеры не в наличии: ").append(w.unavailableSizes())
-                    .append("\nℹ️ Мониторинг товара целиком остановлен. ")
-                    .append("Могу продолжить следить за отсутствующими размерами — кнопка ниже.");
+                    .append("\nМогу дополнительно следить за отсутствующими размерами — кнопка ниже.");
         }
         return sb.toString();
     }
@@ -153,6 +163,15 @@ public class UserNotifier {
                 }
                 keyboard.addRow(new InlineKeyboardButton("📌 Отслеживать отсутствующие · " + hint)
                         .callbackData(CB_WHOLE_KEEP_PREFIX + w.productKey()));
+                yield true;
+            }
+            case WholeUnavailable w -> {
+                keyboard.addRow(
+                        new InlineKeyboardButton("✅ Продолжить · " + hint)
+                                .callbackData(CB_WHOLE_CONTINUE_PREFIX + w.productKey()),
+                        new InlineKeyboardButton("❌ Остановить · " + hint)
+                                .callbackData(CB_WHOLE_STOP_PREFIX + w.productKey())
+                );
                 yield true;
             }
             case PriceMoved ignored -> false;

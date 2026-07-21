@@ -31,7 +31,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static com.ibdev.bot.zara.storage.model.SubscriptionChangeReason.AUTO_AVAILABLE;
 import static com.ibdev.bot.zara.storage.model.SubscriptionMode.AWAIT_RESTOCK;
 import static com.ibdev.bot.zara.storage.model.SubscriptionMode.WATCH_IN_STOCK;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -605,7 +604,7 @@ class MonitoringSchedulerTest {
     }
 
     @Test
-    void wholeProductWithMissingSizesOffersKeepMonitoringButton() {
+    void wholeProductWithMissingSizesOffersKeepMonitoringButtonAndKeepsSubscription() {
         stubProduct(List.of(watch(1L, "*", AWAIT_RESTOCK)), Map.of("S", true, "M", false, "*", true), null);
 
         scheduler.monitor();
@@ -613,24 +612,49 @@ class MonitoringSchedulerTest {
         final var message = sentMessages().getFirst();
         assertThat(textOf(message)).contains("Товар появился", "[M]", "отсутствующими размерами");
         assertThat(message.getParameters().get("reply_markup")).isNotNull();
-        verify(subscriptionService).unsubscribe(1L, KEY, Set.of("*"), AUTO_AVAILABLE);
+        verify(subscriptionService, never()).unsubscribe(anyLong(), any(), any(), any());
     }
 
     @Test
-    void wholeProductFullyAvailableJustStopsMonitoring() {
+    void wholeProductFullyAvailableNotifiesAndKeepsWatching() {
         stubProduct(List.of(watch(1L, "*", AWAIT_RESTOCK)), Map.of("S", true, "M", true, "*", true), null);
 
         scheduler.monitor();
 
         final var message = sentMessages().getFirst();
-        assertThat(textOf(message)).contains("остановил мониторинг");
+        assertThat(textOf(message)).contains("Товар появился");
+        assertThat(textOf(message)).doesNotContain("остановил мониторинг");
         assertThat(message.getParameters().get("reply_markup")).isNull();
-        verify(subscriptionService).unsubscribe(1L, KEY, Set.of("*"), AUTO_AVAILABLE);
+        verify(subscriptionService, never()).unsubscribe(anyLong(), any(), any(), any());
     }
 
     @Test
     void wholeProductStillUnavailableStaysSilent() {
         stubProduct(List.of(watch(1L, "*", AWAIT_RESTOCK)), Map.of("S", false, "*", false), null);
+
+        scheduler.monitor();
+
+        verify(telegramBot, never()).execute(any(SendMessage.class));
+        verify(subscriptionService, never()).unsubscribe(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    void wholeProductDisappearedAsksToContinue() {
+        seed(Map.of("S", true, "*", true));
+        stubProduct(List.of(watch(1L, "*", AWAIT_RESTOCK)), Map.of("S", false, "*", false), null);
+
+        scheduler.monitor();
+
+        final var message = sentMessages().getFirst();
+        assertThat(textOf(message)).contains("пропал", "Продолжить");
+        assertThat(message.getParameters().get("reply_markup")).isNotNull();
+        verify(subscriptionService, never()).unsubscribe(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    void wholeProductStaysAvailableSendsNoRepeat() {
+        seed(Map.of("S", true, "*", true));
+        stubProduct(List.of(watch(1L, "*", AWAIT_RESTOCK)), Map.of("S", true, "*", true), null);
 
         scheduler.monitor();
 

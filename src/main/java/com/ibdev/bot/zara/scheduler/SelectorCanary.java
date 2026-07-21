@@ -1,5 +1,6 @@
 package com.ibdev.bot.zara.scheduler;
 
+import com.ibdev.bot.zara.client.PageDumper;
 import com.ibdev.bot.zara.client.ZaraApiClient;
 import com.ibdev.bot.zara.client.ZaraPageClient;
 import com.ibdev.bot.zara.config.ZaraProperties;
@@ -52,54 +53,76 @@ public class SelectorCanary {
             return;
         }
 
-        final Map<String, Boolean> viaSelenium;
-        try {
-            viaSelenium = checkViaSelenium(ref.link());
-        } catch (final Exception e) {
-            this.adminNotifier.alert(
-                    "canary-selenium",
-                    "Канарейка: Selenium-парсинг падает на " + ref.link() + "\nПричина: " + e.getMessage()
-                            + "\nПохоже, селекторы устарели — фоллбек-путь мониторинга не работает."
-            );
-            return;
-        }
-
         final Map<String, Boolean> viaApi;
         try {
             final var apiSnapshot = this.zaraApiClient.checkSizesAvailability(ref.link());
             viaApi = apiSnapshot == null ? null : apiSnapshot.sizes();
         } catch (final Exception e) {
-            log.info("Canary: API unavailable ({}), but Selenium parsing works — OK.", e.getMessage());
+            log.info("Canary: API unavailable ({}), Selenium not cross-checked — skipping.", e.getMessage());
             return;
         }
         if (viaApi == null || viaApi.isEmpty()) {
-            log.info("Canary: API gave no data, but Selenium parsing works — OK.");
+            log.info("Canary: API gave no data, Selenium not cross-checked — skipping.");
             return;
         }
 
-        final var mismatches = compare(viaApi, viaSelenium);
-        if (mismatches.isEmpty()) {
-            log.info("Canary OK: Selenium and API agree on {} ({} sizes).", productKey, viaApi.size() - 1);
-        } else {
-            this.adminNotifier.alert(
-                    "canary-mismatch",
-                    "Канарейка: Selenium и API разошлись на " + ref.link() + "\n" + String.join("\n", mismatches)
-                            + "\nВозможно, частично сломаны селекторы (например, признак наличия)."
-            );
-        }
-    }
-
-    private Map<String, Boolean> checkViaSelenium(final String link) {
         final var driver = this.webDriverFactory.create();
         final var wait = this.webDriverFactory.createWait(driver);
         try {
-            return new ZaraPageClient(driver, wait).checkSizesAvailability(link).sizes();
+            final Map<String, Boolean> viaSelenium;
+            try {
+                viaSelenium = new ZaraPageClient(driver, wait).checkSizesAvailability(ref.link()).sizes();
+            } catch (final Exception e) {
+                this.adminNotifier.alert(
+                        "canary-selenium",
+                        "Канарейка: Selenium-парсинг падает на " + ref.link() + "\nПричина: " + e.getMessage()
+                                + "\nПохоже, селекторы устарели — фоллбек-путь мониторинга не работает."
+                );
+                return;
+            }
+
+            final var problems = evaluate(viaApi, viaSelenium);
+            if (problems.isEmpty()) {
+                log.info("Canary OK: Selenium and API agree on {} ({} sizes).", productKey, viaApi.size() - 1);
+            } else {
+                PageDumper.dump(driver, "canary-mismatch");
+                this.adminNotifier.alert(
+                        "canary-mismatch",
+                        "Канарейка: Selenium и API разошлись на " + ref.link() + "\n" + String.join("\n", problems)
+                                + "\nСохранён дамп страницы (dumps/) для разбора."
+                );
+            }
         } finally {
             driver.quit();
         }
     }
 
-    private java.util.List<String> compare(final Map<String, Boolean> api, final Map<String, Boolean> selenium) {
+    /**
+     * Compares the API and Selenium availability snapshots and returns the human-readable problems
+     * worth alerting on — empty means the two agree. The comparison is on STOCK, not mere key
+     * presence: the failure the canary exists to catch is "API sees buyable sizes, Selenium sees
+     * none" (the historical silent-monitoring-death, everything read as out-of-stock). A fully
+     * sold-out product, where Selenium legitimately collapses to the WHOLE "*" unavailable sentinel
+     * while the API still enumerates each size as out-of-stock, is agreement — not a mismatch.
+     */
+    java.util.List<String> evaluate(final Map<String, Boolean> api, final Map<String, Boolean> selenium) {
+        final var apiInStock = api.entrySet().stream()
+                .filter(e -> !WHOLE.getSize().equals(e.getKey()))
+                .filter(Map.Entry::getValue)
+                .map(Map.Entry::getKey)
+                .toList();
+
+        if (!sawAnySize(selenium)) {
+            if (apiInStock.isEmpty()) {
+                return java.util.List.of();
+            }
+            return java.util.List.of(
+                    "Selenium показывает «товар недоступен», но по API в наличии: "
+                            + String.join(", ", apiInStock)
+                            + " — вероятно бот-челлендж/гео-блок или сломан парсинг наличия."
+            );
+        }
+
         final var mismatches = new ArrayList<String>();
 
         for (final var entry : api.entrySet()) {
@@ -110,7 +133,9 @@ public class SelectorCanary {
 
             final var seleniumValue = lookup(selenium, size);
             if (seleniumValue == null) {
-                mismatches.add("• размер " + size + ": есть в API, не найден Selenium-парсингом");
+                if (Boolean.TRUE.equals(entry.getValue())) {
+                    mismatches.add("• размер " + size + ": в наличии по API, но Selenium его не видит");
+                }
             } else if (!seleniumValue.equals(entry.getValue())) {
                 mismatches.add("• размер " + size + ": API=" + inStock(entry.getValue())
                         + ", Selenium=" + inStock(seleniumValue));
@@ -118,6 +143,14 @@ public class SelectorCanary {
         }
 
         return mismatches;
+    }
+
+    /**
+     * The Selenium "product unavailable" page collapses to the lone WHOLE "*" sentinel — no real
+     * size was parsed. Any other key means a size lineup was actually read.
+     */
+    private boolean sawAnySize(final Map<String, Boolean> selenium) {
+        return selenium.keySet().stream().anyMatch(key -> !WHOLE.getSize().equals(key));
     }
 
     private Boolean lookup(final Map<String, Boolean> state, final String size) {

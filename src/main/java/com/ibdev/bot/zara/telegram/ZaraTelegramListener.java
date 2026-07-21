@@ -280,6 +280,25 @@ public class ZaraTelegramListener {
             return;
         }
 
+        if (data != null && data.startsWith(UserNotifier.CB_WHOLE_STOP_PREFIX)) {
+            final var productKey = data.substring(UserNotifier.CB_WHOLE_STOP_PREFIX.length());
+            this.subscriptionService.unsubscribe(chatId, productKey, Set.of(WHOLE.getSize()), USER_ACTION);
+            answerToast(cq, "Ок, больше не слежу за этим товаром.");
+            removeItemButtons(cq, Set.of(
+                    UserNotifier.CB_WHOLE_CONTINUE_PREFIX + productKey,
+                    UserNotifier.CB_WHOLE_STOP_PREFIX + productKey));
+            return;
+        }
+
+        if (data != null && data.startsWith(UserNotifier.CB_WHOLE_CONTINUE_PREFIX)) {
+            final var productKey = data.substring(UserNotifier.CB_WHOLE_CONTINUE_PREFIX.length());
+            answerToast(cq, "✅ Продолжаю следить за товаром — сообщу, когда он снова появится.");
+            removeItemButtons(cq, Set.of(
+                    UserNotifier.CB_WHOLE_CONTINUE_PREFIX + productKey,
+                    UserNotifier.CB_WHOLE_STOP_PREFIX + productKey));
+            return;
+        }
+
         if (data != null && data.startsWith(UserNotifier.CB_SIZE_WATCH_PREFIX)) {
             handleSizeDecision(cq, data, UserNotifier.CB_SIZE_WATCH_PREFIX);
             return;

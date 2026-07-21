@@ -29,7 +29,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.ibdev.bot.zara.client.ClothingSizes.WHOLE;
-import static com.ibdev.bot.zara.storage.model.SubscriptionChangeReason.AUTO_AVAILABLE;
 import static com.ibdev.bot.zara.storage.model.SubscriptionMode.WATCH_IN_STOCK;
 import static com.ibdev.bot.zara.util.Sizes.equalsSize;
 import static java.lang.Boolean.TRUE;
@@ -281,7 +280,7 @@ public class MonitoringScheduler {
 
         for (final var watch : watches) {
             if (WHOLE.getSize().equals(watch.size())) {
-                collectWholeProductIfAvailable(watch.chatId(), productKey, ref, current, reports);
+                collectWholeProductTransition(watch.chatId(), productKey, ref, previous, current, reports);
             } else {
                 collectSizeIfAppeared(
                         watch.chatId(), productKey, ref, watch.size(), previous, current,
@@ -718,36 +717,46 @@ public class MonitoringScheduler {
         }
     }
 
-    private void collectWholeProductIfAvailable(
+    /**
+     * Whole-product ("*") watch, notified in <em>both</em> directions on the debounced transition
+     * (symmetric with per-size watches): nothing-buyable → something-buyable fires WholeAvailable with
+     * the full lineup, and the reverse fires WholeUnavailable. The "*" subscription is <em>kept</em>
+     * either way (no auto-unsubscribe), so the round-trip keeps notifying until the user stops it via
+     * the WholeUnavailable "stop" button or the subscriptions menu.
+     */
+    private void collectWholeProductTransition(
             final long chatId,
             final String productKey,
             final SubscriptionService.ProductRef ref,
+            final Map<String, Boolean> previous,
             final Map<String, Boolean> current,
             final Map<Long, List<NotifyEvent>> reports
     ) {
-        if (!TRUE.equals(current.get(WHOLE.getSize()))) {
-            return;
-        }
+        final var was = availability(previous, WHOLE.getSize());
+        final var now = availability(current, WHOLE.getSize());
 
-        final var availableSizes = new HashSet<String>();
-        final var unavailableSizes = new HashSet<String>();
-        for (final var entry : current.entrySet()) {
-            if (WHOLE.getSize().equals(entry.getKey())) {
-                continue;
+        if (!was && now) {
+            final var availableSizes = new HashSet<String>();
+            final var unavailableSizes = new HashSet<String>();
+            for (final var entry : current.entrySet()) {
+                if (WHOLE.getSize().equals(entry.getKey())) {
+                    continue;
+                }
+                if (TRUE.equals(entry.getValue())) {
+                    availableSizes.add(entry.getKey());
+                } else {
+                    unavailableSizes.add(entry.getKey());
+                }
             }
-            if (TRUE.equals(entry.getValue())) {
-                availableSizes.add(entry.getKey());
-            } else {
-                unavailableSizes.add(entry.getKey());
-            }
+            log.info("MON [{}] → chat {}: ALERT WHOLE_AVAILABLE (in-stock={}, still-missing={})",
+                    productKey, chatId, availableSizes, unavailableSizes);
+            add(reports, chatId, new NotifyEvent.WholeAvailable(
+                    productKey, ref.name(), ref.link(), availableSizes, unavailableSizes));
+        } else if (was && !now) {
+            log.info("MON [{}] → chat {}: ALERT WHOLE_UNAVAILABLE (product went fully out of stock)",
+                    productKey, chatId);
+            add(reports, chatId, new NotifyEvent.WholeUnavailable(productKey, ref.name(), ref.link()));
         }
-
-        log.info("MON [{}] → chat {}: ALERT WHOLE_AVAILABLE (in-stock={}, still-missing={}) — auto-unsubscribing '*'",
-                productKey, chatId, availableSizes, unavailableSizes);
-        add(reports, chatId, new NotifyEvent.WholeAvailable(
-                productKey, ref.name(), ref.link(), availableSizes, unavailableSizes));
-
-        this.subscriptionService.unsubscribe(chatId, productKey, Set.of(WHOLE.getSize()), AUTO_AVAILABLE);
     }
 
     /**

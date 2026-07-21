@@ -205,6 +205,22 @@ class ZaraTelegramListenerTest {
     }
 
     @Test
+    void wholeUnavailableStopButtonUnsubscribesWholeProduct() {
+        sendCallback("WHOLE_STOP:" + KEY);
+
+        verify(subscriptionService).unsubscribe(CHAT, KEY, Set.of("*"), USER_ACTION);
+        assertThat(textOf(requests(1).getFirst())).contains("больше не слежу");
+    }
+
+    @Test
+    void wholeUnavailableContinueButtonKeepsWatchingWithoutChange() {
+        sendCallback("WHOLE_CONTINUE:" + KEY);
+
+        verify(subscriptionService, never()).unsubscribe(anyLong(), any(), any(), any());
+        assertThat(textOf(requests(1).getFirst())).contains("Продолжаю следить");
+    }
+
+    @Test
     void staleCallbackWithoutSessionCardAsksToReopen() {
         sendCallback("CONFIRM");
 
