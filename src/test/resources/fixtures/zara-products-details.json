@@ -1,0 +1,791 @@
+[
+  {
+    "id": 495688087,
+    "type": "Product",
+    "kind": "Wear",
+    "state": "visible",
+    "brand": {
+      "brandId": 1,
+      "brandGroupId": 1,
+      "brandGroupCode": "zara"
+    },
+    "name": "100% EXTRA SOFT WOOL JUMPER",
+    "detail": {
+      "reference": "09598104-V2026",
+      "displayReference": "9598/104",
+      "colors": [
+        {
+          "id": "700",
+          "hexCode": "#472A23",
+          "productId": 495689401,
+          "name": "Brown",
+          "reference": "C09598104700000-V2026",
+          "stylingId": "0",
+          "xmedia": [
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "full",
+              "path": "/assets/public/03b2/6dc8/d434435e8699/10bc6bbd041e/09598104700-p",
+              "name": "09598104700-p",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1764083176353",
+              "allowedScreens": [
+                "large",
+                "small"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "p",
+                "assetId": "03b26dc8d434435e869910bc6bbd041e",
+                "deliveryUrl": "https://static.zara.net/assets/public/03b2/6dc8/d434435e8699/10bc6bbd041e/09598104700-p/09598104700-p.jpg?ts=1764083176353",
+                "deliveryPath": "/assets/public/03b2/6dc8/d434435e8699/10bc6bbd041e/09598104700-p/09598104700-p.jpg?ts=1764083176353"
+              },
+              "url": "https://static.zara.net/assets/public/03b2/6dc8/d434435e8699/10bc6bbd041e/09598104700-p/09598104700-p.jpg?ts=1764083176353&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/03b2/6dc8/d434435e8699/10bc6bbd041e/meta.json?ts=1764083176359",
+              "order": 1
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "other",
+              "path": "/assets/public/fce6/566d/bd7d4c3085d2/770e2df310b8/09598104700-a1",
+              "name": "09598104700-a1",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1764083176522",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "a1",
+                "assetId": "fce6566dbd7d4c3085d2770e2df310b8",
+                "deliveryUrl": "https://static.zara.net/assets/public/fce6/566d/bd7d4c3085d2/770e2df310b8/09598104700-a1/09598104700-a1.jpg?ts=1764083176522",
+                "deliveryPath": "/assets/public/fce6/566d/bd7d4c3085d2/770e2df310b8/09598104700-a1/09598104700-a1.jpg?ts=1764083176522"
+              },
+              "url": "https://static.zara.net/assets/public/fce6/566d/bd7d4c3085d2/770e2df310b8/09598104700-a1/09598104700-a1.jpg?ts=1764083176522&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/fce6/566d/bd7d4c3085d2/770e2df310b8/meta.json?ts=1764083176528",
+              "order": 2
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "other",
+              "path": "/assets/public/24ee/9f14/ef58468ea3aa/4495231b6769/09598104700-a2",
+              "name": "09598104700-a2",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1764083176378",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "a2",
+                "assetId": "24ee9f14ef58468ea3aa4495231b6769",
+                "deliveryUrl": "https://static.zara.net/assets/public/24ee/9f14/ef58468ea3aa/4495231b6769/09598104700-a2/09598104700-a2.jpg?ts=1764083176378",
+                "deliveryPath": "/assets/public/24ee/9f14/ef58468ea3aa/4495231b6769/09598104700-a2/09598104700-a2.jpg?ts=1764083176378"
+              },
+              "url": "https://static.zara.net/assets/public/24ee/9f14/ef58468ea3aa/4495231b6769/09598104700-a2/09598104700-a2.jpg?ts=1764083176378&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/24ee/9f14/ef58468ea3aa/4495231b6769/meta.json?ts=1764083176384",
+              "order": 3
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "other",
+              "path": "/assets/public/7e13/fda5/4dc5439f97f8/ac06b00d6fec/09598104700-a3",
+              "name": "09598104700-a3",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1764083176098",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "a3",
+                "assetId": "7e13fda54dc5439f97f8ac06b00d6fec",
+                "deliveryUrl": "https://static.zara.net/assets/public/7e13/fda5/4dc5439f97f8/ac06b00d6fec/09598104700-a3/09598104700-a3.jpg?ts=1764083176098",
+                "deliveryPath": "/assets/public/7e13/fda5/4dc5439f97f8/ac06b00d6fec/09598104700-a3/09598104700-a3.jpg?ts=1764083176098"
+              },
+              "url": "https://static.zara.net/assets/public/7e13/fda5/4dc5439f97f8/ac06b00d6fec/09598104700-a3/09598104700-a3.jpg?ts=1764083176098&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/7e13/fda5/4dc5439f97f8/ac06b00d6fec/meta.json?ts=1764083176106",
+              "order": 4
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "other",
+              "path": "/assets/public/7048/8aea/a18a4c2f86d8/30fd2fb7d105/09598104700-a4",
+              "name": "09598104700-a4",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1764083176239",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "a4",
+                "assetId": "70488aeaa18a4c2f86d830fd2fb7d105",
+                "deliveryUrl": "https://static.zara.net/assets/public/7048/8aea/a18a4c2f86d8/30fd2fb7d105/09598104700-a4/09598104700-a4.jpg?ts=1764083176239",
+                "deliveryPath": "/assets/public/7048/8aea/a18a4c2f86d8/30fd2fb7d105/09598104700-a4/09598104700-a4.jpg?ts=1764083176239"
+              },
+              "url": "https://static.zara.net/assets/public/7048/8aea/a18a4c2f86d8/30fd2fb7d105/09598104700-a4/09598104700-a4.jpg?ts=1764083176239&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/7048/8aea/a18a4c2f86d8/30fd2fb7d105/meta.json?ts=1764083176245",
+              "order": 5
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "plain",
+              "path": "/assets/public/0cc9/bad6/4ccd4f0890be/1b6c0bc9facb/09598104700-e1",
+              "name": "09598104700-e1",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1763985605914",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "e1",
+                "assetId": "0cc9bad64ccd4f0890be1b6c0bc9facb",
+                "deliveryUrl": "https://static.zara.net/assets/public/0cc9/bad6/4ccd4f0890be/1b6c0bc9facb/09598104700-e1/09598104700-e1.jpg?ts=1763985605914",
+                "deliveryPath": "/assets/public/0cc9/bad6/4ccd4f0890be/1b6c0bc9facb/09598104700-e1/09598104700-e1.jpg?ts=1763985605914"
+              },
+              "url": "https://static.zara.net/assets/public/0cc9/bad6/4ccd4f0890be/1b6c0bc9facb/09598104700-e1/09598104700-e1.jpg?ts=1763985605914&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/0cc9/bad6/4ccd4f0890be/1b6c0bc9facb/meta.json?ts=1763985605920",
+              "order": 6
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "plain",
+              "path": "/assets/public/5c51/8789/d03c4be0b023/01a9f0531e8f/09598104700-e2",
+              "name": "09598104700-e2",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1763985605675",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "e2",
+                "assetId": "5c518789d03c4be0b02301a9f0531e8f",
+                "deliveryUrl": "https://static.zara.net/assets/public/5c51/8789/d03c4be0b023/01a9f0531e8f/09598104700-e2/09598104700-e2.jpg?ts=1763985605675",
+                "deliveryPath": "/assets/public/5c51/8789/d03c4be0b023/01a9f0531e8f/09598104700-e2/09598104700-e2.jpg?ts=1763985605675"
+              },
+              "url": "https://static.zara.net/assets/public/5c51/8789/d03c4be0b023/01a9f0531e8f/09598104700-e2/09598104700-e2.jpg?ts=1763985605675&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/5c51/8789/d03c4be0b023/01a9f0531e8f/meta.json?ts=1763985605681",
+              "order": 7
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "plain",
+              "path": "/assets/public/1b47/9af1/4e0a4f39958d/38a3b5864af8/09598104700-e3",
+              "name": "09598104700-e3",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1763985606602",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "e3",
+                "assetId": "1b479af14e0a4f39958d38a3b5864af8",
+                "deliveryUrl": "https://static.zara.net/assets/public/1b47/9af1/4e0a4f39958d/38a3b5864af8/09598104700-e3/09598104700-e3.jpg?ts=1763985606602",
+                "deliveryPath": "/assets/public/1b47/9af1/4e0a4f39958d/38a3b5864af8/09598104700-e3/09598104700-e3.jpg?ts=1763985606602"
+              },
+              "url": "https://static.zara.net/assets/public/1b47/9af1/4e0a4f39958d/38a3b5864af8/09598104700-e3/09598104700-e3.jpg?ts=1763985606602&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/1b47/9af1/4e0a4f39958d/38a3b5864af8/meta.json?ts=1763985606609",
+              "order": 8
+            }
+          ],
+          "shopcartMedia": [
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "other",
+              "path": "/assets/public/418f/43c7/281f4825a205/0e8bc833c031/09598104700-f1",
+              "name": "09598104700-f1",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1769018224205",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "f1",
+                "assetId": "418f43c7281f4825a2050e8bc833c031",
+                "deliveryUrl": "https://static.zara.net/assets/public/418f/43c7/281f4825a205/0e8bc833c031/09598104700-f1/09598104700-f1.jpg?ts=1769018224205",
+                "deliveryPath": "/assets/public/418f/43c7/281f4825a205/0e8bc833c031/09598104700-f1/09598104700-f1.jpg?ts=1769018224205"
+              },
+              "url": "https://static.zara.net/assets/public/418f/43c7/281f4825a205/0e8bc833c031/09598104700-f1/09598104700-f1.jpg?ts=1769018224205&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/418f/43c7/281f4825a205/0e8bc833c031/meta.json?ts=1769018224211"
+            }
+          ],
+          "colorSelectorMedias": [
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "other",
+              "path": "/assets/public/418f/43c7/281f4825a205/0e8bc833c031/09598104700-f1",
+              "name": "09598104700-f1",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1769018224205",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "f1",
+                "assetId": "418f43c7281f4825a2050e8bc833c031",
+                "deliveryUrl": "https://static.zara.net/assets/public/418f/43c7/281f4825a205/0e8bc833c031/09598104700-f1/09598104700-f1.jpg?ts=1769018224205",
+                "deliveryPath": "/assets/public/418f/43c7/281f4825a205/0e8bc833c031/09598104700-f1/09598104700-f1.jpg?ts=1769018224205"
+              },
+              "url": "https://static.zara.net/assets/public/418f/43c7/281f4825a205/0e8bc833c031/09598104700-f1/09598104700-f1.jpg?ts=1769018224205&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/418f/43c7/281f4825a205/0e8bc833c031/meta.json?ts=1769018224211"
+            }
+          ],
+          "price": 1198,
+          "oldPrice": 3995,
+          "displayDiscountPercentage": 70,
+          "discountPercentage": "70%",
+          "discountLabel": "-70%",
+          "sizes": [
+            {
+              "availability": "out_of_stock",
+              "equivalentSizeId": 101,
+              "id": 1,
+              "name": "XS",
+              "oldPrice": 3995,
+              "price": 1198,
+              "displayDiscountPercentage": 70,
+              "discountPercentage": "70%",
+              "discountLabel": "-70%",
+              "reference": "0959810470001-V2026",
+              "sku": 495688099,
+              "attributes": [
+                {
+                  "type": "Mark",
+                  "identifier": "PACKAGING",
+                  "name": "",
+                  "values": [],
+                  "properties": {}
+                },
+                {
+                  "type": "Valued",
+                  "identifier": "CONFECTION",
+                  "name": "",
+                  "values": [
+                    "CN"
+                  ],
+                  "properties": {}
+                }
+              ],
+              "demand": "DEMAND_REGULAR"
+            },
+            {
+              "availability": "out_of_stock",
+              "equivalentSizeId": 102,
+              "id": 2,
+              "name": "S",
+              "oldPrice": 3995,
+              "price": 1198,
+              "displayDiscountPercentage": 70,
+              "discountPercentage": "70%",
+              "discountLabel": "-70%",
+              "reference": "0959810470002-V2026",
+              "sku": 495688103,
+              "attributes": [
+                {
+                  "type": "Mark",
+                  "identifier": "PACKAGING",
+                  "name": "",
+                  "values": [],
+                  "properties": {}
+                },
+                {
+                  "type": "Valued",
+                  "identifier": "CONFECTION",
+                  "name": "",
+                  "values": [
+                    "CN"
+                  ],
+                  "properties": {}
+                }
+              ],
+              "demand": "DEMAND_REGULAR"
+            },
+            {
+              "availability": "out_of_stock",
+              "equivalentSizeId": 103,
+              "id": 3,
+              "name": "M",
+              "oldPrice": 3995,
+              "price": 1198,
+              "displayDiscountPercentage": 70,
+              "discountPercentage": "70%",
+              "discountLabel": "-70%",
+              "reference": "0959810470003-V2026",
+              "sku": 495688106,
+              "attributes": [
+                {
+                  "type": "Mark",
+                  "identifier": "PACKAGING",
+                  "name": "",
+                  "values": [],
+                  "properties": {}
+                },
+                {
+                  "type": "Valued",
+                  "identifier": "CONFECTION",
+                  "name": "",
+                  "values": [
+                    "CN"
+                  ],
+                  "properties": {}
+                }
+              ],
+              "demand": "DEMAND_REGULAR"
+            },
+            {
+              "availability": "out_of_stock",
+              "equivalentSizeId": 104,
+              "id": 4,
+              "name": "L",
+              "oldPrice": 3995,
+              "price": 1198,
+              "displayDiscountPercentage": 70,
+              "discountPercentage": "70%",
+              "discountLabel": "-70%",
+              "reference": "0959810470004-V2026",
+              "sku": 495688108,
+              "attributes": [
+                {
+                  "type": "Mark",
+                  "identifier": "PACKAGING",
+                  "name": "",
+                  "values": [],
+                  "properties": {}
+                },
+                {
+                  "type": "Valued",
+                  "identifier": "CONFECTION",
+                  "name": "",
+                  "values": [
+                    "CN"
+                  ],
+                  "properties": {}
+                }
+              ],
+              "demand": "DEMAND_REGULAR"
+            },
+            {
+              "availability": "out_of_stock",
+              "equivalentSizeId": 105,
+              "id": 5,
+              "name": "XL",
+              "oldPrice": 3995,
+              "price": 1198,
+              "displayDiscountPercentage": 70,
+              "discountPercentage": "70%",
+              "discountLabel": "-70%",
+              "reference": "0959810470005-V2026",
+              "sku": 495688110,
+              "attributes": [
+                {
+                  "type": "Mark",
+                  "identifier": "PACKAGING",
+                  "name": "",
+                  "values": [],
+                  "properties": {}
+                },
+                {
+                  "type": "Valued",
+                  "identifier": "CONFECTION",
+                  "name": "",
+                  "values": [
+                    "CN"
+                  ],
+                  "properties": {}
+                }
+              ],
+              "demand": "DEMAND_REGULAR"
+            }
+          ],
+          "description": "Model height: 177 cm\n\nJumper made from 100% wool yarn. Featuring a round neck and long sleeves. Soft-touch fabric detail.",
+          "rawDescription": "Model height: 177 cm<br/><br/>Jumper made from 100% wool yarn. Featuring a round neck and long sleeves. Soft-touch fabric detail.",
+          "extraInfo": {
+            "isStockInStoresAvailable": true,
+            "highlightPrice": false,
+            "message": {
+              "text": "39,95 EUR lowest price from last 30 days; 11,98 EUR discounted price"
+            },
+            "editorialxMedias": [],
+            "extraDetailSections": []
+          },
+          "customizations": [],
+          "tagTypes": [],
+          "attributes": [
+            {
+              "type": "Smart_tag",
+              "identifier": "TAG_UPPERBODY_LAYERS_3_LAYERS",
+              "name": "UPPERBODY_LAYERS",
+              "values": [],
+              "properties": {
+                "probability": "1.0",
+                "source": "GROUP",
+                "type": "LAYERS",
+                "typeProbability": "1.0"
+              }
+            }
+          ],
+          "relations": [
+            {
+              "ids": [
+                493599144
+              ],
+              "type": "OTHER_COLOR"
+            },
+            {
+              "ids": [
+                470213264,
+                500177579,
+                488384509,
+                456950085,
+                544784632
+              ],
+              "type": "PACMAN-LOOK"
+            }
+          ],
+          "promotions": [
+            {
+              "name": "SALES-V2026_ZARA_ME",
+              "startDate": "2026-07-15T13:33:54Z",
+              "endDate": "2026-11-17T10:00:00Z"
+            }
+          ],
+          "pricing": {
+            "price": {
+              "value": 1198,
+              "currency": {
+                "code": "EUR",
+                "exponent": -2
+              }
+            },
+            "promotions": [
+              {
+                "name": "SALES-V2026_ZARA_ME",
+                "startDate": "2026-07-15T13:33:54Z",
+                "endDate": "2026-11-17T10:00:00Z"
+              }
+            ]
+          },
+          "mainImgs": [
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "full",
+              "path": "/assets/public/03b2/6dc8/d434435e8699/10bc6bbd041e/09598104700-p",
+              "name": "09598104700-p",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1764083176353",
+              "allowedScreens": [
+                "large",
+                "small"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "p",
+                "assetId": "03b26dc8d434435e869910bc6bbd041e",
+                "deliveryUrl": "https://static.zara.net/assets/public/03b2/6dc8/d434435e8699/10bc6bbd041e/09598104700-p/09598104700-p.jpg?ts=1764083176353",
+                "deliveryPath": "/assets/public/03b2/6dc8/d434435e8699/10bc6bbd041e/09598104700-p/09598104700-p.jpg?ts=1764083176353"
+              },
+              "url": "https://static.zara.net/assets/public/03b2/6dc8/d434435e8699/10bc6bbd041e/09598104700-p/09598104700-p.jpg?ts=1764083176353&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/03b2/6dc8/d434435e8699/10bc6bbd041e/meta.json?ts=1764083176359",
+              "order": 1
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "other",
+              "path": "/assets/public/fce6/566d/bd7d4c3085d2/770e2df310b8/09598104700-a1",
+              "name": "09598104700-a1",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1764083176522",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "a1",
+                "assetId": "fce6566dbd7d4c3085d2770e2df310b8",
+                "deliveryUrl": "https://static.zara.net/assets/public/fce6/566d/bd7d4c3085d2/770e2df310b8/09598104700-a1/09598104700-a1.jpg?ts=1764083176522",
+                "deliveryPath": "/assets/public/fce6/566d/bd7d4c3085d2/770e2df310b8/09598104700-a1/09598104700-a1.jpg?ts=1764083176522"
+              },
+              "url": "https://static.zara.net/assets/public/fce6/566d/bd7d4c3085d2/770e2df310b8/09598104700-a1/09598104700-a1.jpg?ts=1764083176522&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/fce6/566d/bd7d4c3085d2/770e2df310b8/meta.json?ts=1764083176528",
+              "order": 2
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "other",
+              "path": "/assets/public/24ee/9f14/ef58468ea3aa/4495231b6769/09598104700-a2",
+              "name": "09598104700-a2",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1764083176378",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "a2",
+                "assetId": "24ee9f14ef58468ea3aa4495231b6769",
+                "deliveryUrl": "https://static.zara.net/assets/public/24ee/9f14/ef58468ea3aa/4495231b6769/09598104700-a2/09598104700-a2.jpg?ts=1764083176378",
+                "deliveryPath": "/assets/public/24ee/9f14/ef58468ea3aa/4495231b6769/09598104700-a2/09598104700-a2.jpg?ts=1764083176378"
+              },
+              "url": "https://static.zara.net/assets/public/24ee/9f14/ef58468ea3aa/4495231b6769/09598104700-a2/09598104700-a2.jpg?ts=1764083176378&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/24ee/9f14/ef58468ea3aa/4495231b6769/meta.json?ts=1764083176384",
+              "order": 3
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "other",
+              "path": "/assets/public/7e13/fda5/4dc5439f97f8/ac06b00d6fec/09598104700-a3",
+              "name": "09598104700-a3",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1764083176098",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "a3",
+                "assetId": "7e13fda54dc5439f97f8ac06b00d6fec",
+                "deliveryUrl": "https://static.zara.net/assets/public/7e13/fda5/4dc5439f97f8/ac06b00d6fec/09598104700-a3/09598104700-a3.jpg?ts=1764083176098",
+                "deliveryPath": "/assets/public/7e13/fda5/4dc5439f97f8/ac06b00d6fec/09598104700-a3/09598104700-a3.jpg?ts=1764083176098"
+              },
+              "url": "https://static.zara.net/assets/public/7e13/fda5/4dc5439f97f8/ac06b00d6fec/09598104700-a3/09598104700-a3.jpg?ts=1764083176098&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/7e13/fda5/4dc5439f97f8/ac06b00d6fec/meta.json?ts=1764083176106",
+              "order": 4
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "other",
+              "path": "/assets/public/7048/8aea/a18a4c2f86d8/30fd2fb7d105/09598104700-a4",
+              "name": "09598104700-a4",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1764083176239",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "a4",
+                "assetId": "70488aeaa18a4c2f86d830fd2fb7d105",
+                "deliveryUrl": "https://static.zara.net/assets/public/7048/8aea/a18a4c2f86d8/30fd2fb7d105/09598104700-a4/09598104700-a4.jpg?ts=1764083176239",
+                "deliveryPath": "/assets/public/7048/8aea/a18a4c2f86d8/30fd2fb7d105/09598104700-a4/09598104700-a4.jpg?ts=1764083176239"
+              },
+              "url": "https://static.zara.net/assets/public/7048/8aea/a18a4c2f86d8/30fd2fb7d105/09598104700-a4/09598104700-a4.jpg?ts=1764083176239&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/7048/8aea/a18a4c2f86d8/30fd2fb7d105/meta.json?ts=1764083176245",
+              "order": 5
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "plain",
+              "path": "/assets/public/0cc9/bad6/4ccd4f0890be/1b6c0bc9facb/09598104700-e1",
+              "name": "09598104700-e1",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1763985605914",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "e1",
+                "assetId": "0cc9bad64ccd4f0890be1b6c0bc9facb",
+                "deliveryUrl": "https://static.zara.net/assets/public/0cc9/bad6/4ccd4f0890be/1b6c0bc9facb/09598104700-e1/09598104700-e1.jpg?ts=1763985605914",
+                "deliveryPath": "/assets/public/0cc9/bad6/4ccd4f0890be/1b6c0bc9facb/09598104700-e1/09598104700-e1.jpg?ts=1763985605914"
+              },
+              "url": "https://static.zara.net/assets/public/0cc9/bad6/4ccd4f0890be/1b6c0bc9facb/09598104700-e1/09598104700-e1.jpg?ts=1763985605914&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/0cc9/bad6/4ccd4f0890be/1b6c0bc9facb/meta.json?ts=1763985605920",
+              "order": 6
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "plain",
+              "path": "/assets/public/5c51/8789/d03c4be0b023/01a9f0531e8f/09598104700-e2",
+              "name": "09598104700-e2",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1763985605675",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "e2",
+                "assetId": "5c518789d03c4be0b02301a9f0531e8f",
+                "deliveryUrl": "https://static.zara.net/assets/public/5c51/8789/d03c4be0b023/01a9f0531e8f/09598104700-e2/09598104700-e2.jpg?ts=1763985605675",
+                "deliveryPath": "/assets/public/5c51/8789/d03c4be0b023/01a9f0531e8f/09598104700-e2/09598104700-e2.jpg?ts=1763985605675"
+              },
+              "url": "https://static.zara.net/assets/public/5c51/8789/d03c4be0b023/01a9f0531e8f/09598104700-e2/09598104700-e2.jpg?ts=1763985605675&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/5c51/8789/d03c4be0b023/01a9f0531e8f/meta.json?ts=1763985605681",
+              "order": 7
+            },
+            {
+              "datatype": "xmedia",
+              "set": 2,
+              "type": "image",
+              "kind": "plain",
+              "path": "/assets/public/1b47/9af1/4e0a4f39958d/38a3b5864af8/09598104700-e3",
+              "name": "09598104700-e3",
+              "width": 2048,
+              "height": 3072,
+              "timestamp": "1763985606602",
+              "allowedScreens": [
+                "small",
+                "large"
+              ],
+              "gravity": "top",
+              "extraInfo": {
+                "originalName": "e3",
+                "assetId": "1b479af14e0a4f39958d38a3b5864af8",
+                "deliveryUrl": "https://static.zara.net/assets/public/1b47/9af1/4e0a4f39958d/38a3b5864af8/09598104700-e3/09598104700-e3.jpg?ts=1763985606602",
+                "deliveryPath": "/assets/public/1b47/9af1/4e0a4f39958d/38a3b5864af8/09598104700-e3/09598104700-e3.jpg?ts=1763985606602"
+              },
+              "url": "https://static.zara.net/assets/public/1b47/9af1/4e0a4f39958d/38a3b5864af8/09598104700-e3/09598104700-e3.jpg?ts=1763985606602&w={width}",
+              "metaUrl": "https://static.zara.net/assets/public/1b47/9af1/4e0a4f39958d/38a3b5864af8/meta.json?ts=1763985606609",
+              "order": 8
+            }
+          ],
+          "priceUnavailable": false,
+          "isOnSale": true
+        }
+      ],
+      "colorSelectorLabel": "Colour",
+      "detailedComposition": {
+        "parts": [
+          {
+            "description": "OUTER SHELL",
+            "areas": [],
+            "components": [
+              {
+                "material": "wool",
+                "percentage": "100%"
+              }
+            ],
+            "microcontents": [],
+            "reinforcements": []
+          }
+        ],
+        "exceptions": []
+      },
+      "relatedProducts": []
+    },
+    "section": 1,
+    "sectionName": "WOMAN",
+    "familyId": 82,
+    "familyName": "JERSEY",
+    "subfamilyId": 11273,
+    "subfamilyName": "PUNTO JERSEY",
+    "extraInfo": {
+      "isSizeRecommender": true,
+      "hasSpecialReturnConditions": false,
+      "isNonReturnable": false,
+      "hasInteractiveSizeGuide": true,
+      "extraDetailTitle": "Composition, care & origin",
+      "isBracketingRestricted": true,
+      "hasTipsOnExtraDetail": true,
+      "highlightPrice": false,
+      "isRecommendedCarouselEnabled": true,
+      "isVirtualTryOnSupported": false,
+      "hasPackagingInfo": true,
+      "packagingSectionTitle": "PACKAGING",
+      "extraDetailSections": []
+    },
+    "seo": {
+      "keyword": "100-extra-soft-wool-jumper",
+      "description": "Model height: 177 cm<br/><br/>Jumper made from 100% wool yarn. Featuring a round neck and long sleeves. Soft-touch fabric detail.",
+      "breadCrumb": [
+        {
+          "text": "100% EXTRA SOFT WOOL JUMPER",
+          "id": 0
+        }
+      ],
+      "seoProductId": "09598104",
+      "discernProductId": 495689401,
+      "keyWordI18n": [
+        {
+          "langId": -1,
+          "keyword": "100-extra-soft-wool-jumper"
+        },
+        {
+          "langId": 370,
+          "keyword": "dzemper-od-100-ekstra-mekane-vune"
+        }
+      ]
+    },
+    "firstVisibleDate": "2025-11-26T00:00:00Z",
+    "attributes": [],
+    "sizeGuide": {
+      "enabled": true
+    },
+    "sizeSystem": "2",
+    "xmedia": [],
+    "productTag": []
+  }
+]

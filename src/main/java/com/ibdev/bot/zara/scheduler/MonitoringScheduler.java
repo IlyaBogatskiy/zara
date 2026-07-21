@@ -26,6 +26,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.ibdev.bot.zara.client.ClothingSizes.WHOLE;
@@ -154,14 +157,17 @@ public class MonitoringScheduler {
         this.tick++;
         final var startedAt = System.currentTimeMillis();
         alertOnMonitoringGap(startedAt);
-        final var reports = new LinkedHashMap<Long, List<NotifyEvent>>();
         final var burstBudget = new AtomicInteger(this.properties.getMonitor().getBurstConfirmMaxPerTick());
+
+        final var perProduct = scanProducts(productKeys, burstBudget);
+        final var reports = new LinkedHashMap<Long, List<NotifyEvent>>();
         for (final var productKey : productKeys) {
-            try {
-                monitorProduct(productKey, reports, burstBudget);
-            } catch (final Exception e) {
-                log.error("Monitoring failed for productKey {}: {}", productKey, e.getMessage(), e);
+            final var local = perProduct.get(productKey);
+            if (local == null) {
+                continue;
             }
+            local.forEach((chatId, events) ->
+                    reports.computeIfAbsent(chatId, id -> new ArrayList<>()).addAll(events));
         }
 
         for (final var entry : reports.entrySet()) {
@@ -178,6 +184,75 @@ public class MonitoringScheduler {
                 productKeys.size(), reports.size(), durationMs);
         alertOnSlowTick(durationMs);
         this.lastTickCompletedAt = finishedAt;
+    }
+
+    /**
+     * Scrapes every product for the tick and returns each product's events keyed by productKey. With
+     * {@code scan-threads > 1} and more than one product the scans run concurrently in a bounded
+     * per-tick pool, so one slow product (a synchronous Selenium fallback, itself capped by
+     * {@code driver.page-load-timeout-seconds}) no longer blocks the rest of the tick. This is safe
+     * because each product touches only its own key in the scheduler's state maps ({@link #lastKnown}
+     * etc., all {@link ConcurrentHashMap}) and accumulates into its own local report map — nothing
+     * shared is mutated across threads, and the caller merges the locals in productKeys order so the
+     * result is identical to a sequential scan. A single product (or {@code scan-threads == 1}) runs
+     * inline without a pool.
+     */
+    private Map<String, Map<Long, List<NotifyEvent>>> scanProducts(
+            final Set<String> productKeys, final AtomicInteger burstBudget) {
+        final var threads = Math.max(1, this.properties.getMonitor().getScanThreads());
+        final var result = new HashMap<String, Map<Long, List<NotifyEvent>>>();
+
+        if (threads == 1 || productKeys.size() == 1) {
+            for (final var productKey : productKeys) {
+                result.put(productKey, scanProduct(productKey, burstBudget));
+            }
+            return result;
+        }
+
+        final var pool = Executors.newFixedThreadPool(Math.min(threads, productKeys.size()), scanThreadFactory());
+        try {
+            final var futures = new LinkedHashMap<String, Future<Map<Long, List<NotifyEvent>>>>();
+            for (final var productKey : productKeys) {
+                futures.put(productKey, pool.submit(() -> scanProduct(productKey, burstBudget)));
+            }
+            for (final var entry : futures.entrySet()) {
+                try {
+                    result.put(entry.getKey(), entry.getValue().get());
+                } catch (final Exception e) {
+                    log.error("Monitoring failed for productKey {}: {}", entry.getKey(), e.getMessage(), e);
+                    result.put(entry.getKey(), Map.of());
+                }
+            }
+            return result;
+        } finally {
+            pool.shutdown();
+        }
+    }
+
+    /**
+     * One product's scan into a fresh local report map. Exceptions are contained here so a single
+     * failing product never breaks the tick — or the other parallel scans.
+     */
+    private Map<Long, List<NotifyEvent>> scanProduct(final String productKey, final AtomicInteger burstBudget) {
+        final var local = new LinkedHashMap<Long, List<NotifyEvent>>();
+        try {
+            monitorProduct(productKey, local, burstBudget);
+        } catch (final Exception e) {
+            log.error("Monitoring failed for productKey {}: {}", productKey, e.getMessage(), e);
+        }
+        return local;
+    }
+
+    /**
+     * Daemon threads named for readable logs — daemon so JVM shutdown never waits on a scan in flight.
+     */
+    private ThreadFactory scanThreadFactory() {
+        final var counter = new AtomicInteger();
+        return runnable -> {
+            final var thread = new Thread(runnable, "monitor-scan-" + counter.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
     }
 
     /**
@@ -388,12 +463,11 @@ public class MonitoringScheduler {
         if (!hasUnconfirmedWatchedChange(productKey, watches)) {
             return;
         }
-        if (burstBudget.get() <= 0) {
+        if (burstBudget.getAndUpdate(remaining -> remaining > 0 ? remaining - 1 : remaining) <= 0) {
             log.debug("MON [{}] burst-confirm skipped — per-tick budget exhausted, using cross-tick debounce.",
                     productKey);
             return;
         }
-        burstBudget.decrementAndGet();
 
         if (!sleep(this.properties.getMonitor().getBurstConfirmDelayMs())) {
             return;

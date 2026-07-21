@@ -84,6 +84,8 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/zara_bot
       DB_USERNAME: ${POSTGRES_USER:-zara}
       DB_PASSWORD: ${POSTGRES_PASSWORD:-zara_pass}
+      # this dev stack auto-creates the schema on a fresh volume; the app default is validate (prod-safe)
+      DB_DDL_AUTO: ${DB_DDL_AUTO:-update}
       # --- scraping: Selenium fallback goes to the container, not a local Chrome ---
       ZARA_DRIVER_REMOTE_URL: http://selenium:4444
       # --- operator alerts (selector breakage etc.); 0 = log only ---

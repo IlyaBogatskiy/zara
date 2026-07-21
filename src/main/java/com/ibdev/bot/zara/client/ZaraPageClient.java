@@ -1,6 +1,6 @@
 package com.ibdev.bot.zara.client;
 
-import lombok.RequiredArgsConstructor;
+import com.ibdev.bot.zara.config.ZaraProperties;
 import lombok.extern.log4j.Log4j2;
 import org.openqa.selenium.*;
 import org.openqa.selenium.support.ui.ExpectedConditions;
@@ -17,23 +17,7 @@ import static java.lang.Boolean.*;
  * @author i.bogatskii
  */
 @Log4j2
-@RequiredArgsConstructor
 public class ZaraPageClient {
-
-    private static final By PRODUCT_NAME = By.cssSelector("h1[data-qa-qualifier='product-detail-info-name']");
-    private static final By ADD_TO_CART_BTN = By.cssSelector("button[data-qa-action='add-to-cart']");
-    private static final By VIEW_SIMILAR_BTN = By.cssSelector("button[data-qa-action='show-similar-products']");
-    private static final By SIZE_LI = By.cssSelector("ul.size-selector-sizes > li");
-    private static final By SIZE_LABEL = By.cssSelector("div[data-qa-qualifier='size-selector-sizes-size-label']");
-    private static final By SIZE_BTN = By.cssSelector("button[data-qa-action^='size-']");
-    private static final By ONE_TRUST_BTN = By.cssSelector("button#onetrust-accept-btn-handler");
-    private static final By PRICE_CURRENT = By.cssSelector(
-            "[data-qa-qualifier='price-amount-current'], .price__amount--current .money-amount__main");
-
-    /**
-     * In-stock marker within the size button's data-qa-action (e.g. "size-in-stock").
-     */
-    private static final String IN_STOCK_MARKER = "in-stock";
 
     /**
      * "17.97 EUR" / "1 797 RSD" → numeric group + currency-letters group.
@@ -43,6 +27,39 @@ public class ZaraPageClient {
 
     private final WebDriver webDriver;
     private final WebDriverWait webDriverWait;
+
+    private final By productName;
+    private final By addToCart;
+    private final By viewSimilar;
+    private final By sizeRow;
+    private final By sizeLabel;
+    private final By sizeButton;
+    private final By cookieAccept;
+    private final By priceCurrent;
+
+    /**
+     * In-stock marker within the size button's data-qa-action (e.g. "size-in-stock").
+     */
+    private final String inStockMarker;
+
+    /**
+     * Selectors come from configuration ({@code zara.selectors.*}) so a Zara DOM change can be
+     * hotfixed via env/yaml without recompiling; the defaults match the last-known-good markup.
+     */
+    public ZaraPageClient(final WebDriver webDriver, final WebDriverWait webDriverWait,
+                          final ZaraProperties.Selectors selectors) {
+        this.webDriver = webDriver;
+        this.webDriverWait = webDriverWait;
+        this.productName = By.cssSelector(selectors.getProductName());
+        this.addToCart = By.cssSelector(selectors.getAddToCart());
+        this.viewSimilar = By.cssSelector(selectors.getViewSimilar());
+        this.sizeRow = By.cssSelector(selectors.getSizeRow());
+        this.sizeLabel = By.cssSelector(selectors.getSizeLabel());
+        this.sizeButton = By.cssSelector(selectors.getSizeButton());
+        this.cookieAccept = By.cssSelector(selectors.getCookieAccept());
+        this.priceCurrent = By.cssSelector(selectors.getPriceCurrent());
+        this.inStockMarker = selectors.getInStockMarker();
+    }
 
     public ProductCard loadProductCard(final String link) {
         this.webDriver.get(link);
@@ -81,7 +98,7 @@ public class ZaraPageClient {
         final var price = readPrice();
         openSizesPopup();
 
-        final var sizeLis = this.webDriver.findElements(SIZE_LI);
+        final var sizeLis = this.webDriver.findElements(sizeRow);
 
         if (sizeLis.isEmpty()) {
             PageDumper.dump(this.webDriver, "no-size-rows");
@@ -95,8 +112,8 @@ public class ZaraPageClient {
 
         for (final var li : sizeLis) {
             try {
-                final var label = li.findElement(SIZE_LABEL).getText().trim();
-                final var inStock = isInStock(li.findElement(SIZE_BTN));
+                final var label = li.findElement(sizeLabel).getText().trim();
+                final var inStock = isInStock(li.findElement(sizeButton));
                 state.put(label, inStock);
                 if (inStock) {
                     anyInStock = true;
@@ -121,7 +138,7 @@ public class ZaraPageClient {
      */
     private PriceInfo readPrice() {
         try {
-            final var elements = this.webDriver.findElements(PRICE_CURRENT);
+            final var elements = this.webDriver.findElements(priceCurrent);
             if (elements.isEmpty()) {
                 return null;
             }
@@ -156,13 +173,13 @@ public class ZaraPageClient {
 
 
     private boolean isProductUnavailable() {
-        return !this.webDriver.findElements(VIEW_SIMILAR_BTN).isEmpty()
-                && this.webDriver.findElements(ADD_TO_CART_BTN).isEmpty();
+        return !this.webDriver.findElements(viewSimilar).isEmpty()
+                && this.webDriver.findElements(addToCart).isEmpty();
     }
 
     private void acceptCookiesIfPresent() {
         try {
-            final var cookiesBtn = webDriver.findElement(ONE_TRUST_BTN);
+            final var cookiesBtn = webDriver.findElement(cookieAccept);
 
             if (cookiesBtn.isDisplayed()) {
                 cookiesBtn.click();
@@ -183,7 +200,7 @@ public class ZaraPageClient {
         try {
             final var addButton = this.webDriverWait.until(driver -> {
                 try {
-                    final var btn = driver.findElement(ADD_TO_CART_BTN);
+                    final var btn = driver.findElement(addToCart);
                     return btn.isDisplayed() ? btn : null;
                 } catch (final NoSuchElementException e) {
                     return null;
@@ -198,7 +215,7 @@ public class ZaraPageClient {
                 ((JavascriptExecutor) this.webDriver).executeScript("arguments[0].click();", addButton);
             }
 
-            this.webDriverWait.until(ExpectedConditions.presenceOfElementLocated(SIZE_LI));
+            this.webDriverWait.until(ExpectedConditions.presenceOfElementLocated(sizeRow));
         } catch (final org.openqa.selenium.TimeoutException e) {
             PageDumper.dump(this.webDriver, "no-add-to-cart");
             throw new ZaraParsingException(
@@ -212,12 +229,12 @@ public class ZaraPageClient {
      * can pick any size to track — not just the out-of-stock ones.
      */
     private List<SizeInfo> readAllSizeDetails() {
-        final var sizeLis = this.webDriver.findElements(SIZE_LI);
+        final var sizeLis = this.webDriver.findElements(sizeRow);
         final var result = new ArrayList<SizeInfo>();
 
         for (final var li : sizeLis) {
-            final var label = li.findElement(SIZE_LABEL).getText().trim();
-            final var inStock = isInStock(li.findElement(SIZE_BTN));
+            final var label = li.findElement(sizeLabel).getText().trim();
+            final var inStock = isInStock(li.findElement(sizeButton));
             result.add(new SizeInfo(label, inStock));
         }
 
@@ -226,7 +243,7 @@ public class ZaraPageClient {
 
     private boolean isInStock(final WebElement sizeButton) {
         final var qaAction = sizeButton.getAttribute("data-qa-action");
-        final var inStock = qaAction != null && qaAction.contains(IN_STOCK_MARKER);
+        final var inStock = qaAction != null && qaAction.contains(inStockMarker);
 
         final var ariaDisabled = sizeButton.getAttribute("aria-disabled");
         if (TRUE.toString().equalsIgnoreCase(ariaDisabled) || !sizeButton.isEnabled()) {
@@ -238,7 +255,7 @@ public class ZaraPageClient {
 
     private String readProductName() {
         return this.webDriverWait
-                .until(ExpectedConditions.visibilityOfElementLocated(PRODUCT_NAME))
+                .until(ExpectedConditions.visibilityOfElementLocated(productName))
                 .getText()
                 .trim()
                 .replaceAll("\\s+", " ");

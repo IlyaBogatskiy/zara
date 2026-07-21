@@ -31,6 +31,7 @@ public class ZaraProperties {
     private final Monitor monitor = new Monitor();
     private final LogDigest logDigest = new LogDigest();
     private final ActivitySummary activitySummary = new ActivitySummary();
+    private final Selectors selectors = new Selectors();
 
     @Getter
     @Setter
@@ -169,6 +170,14 @@ public class ZaraProperties {
          * blocking the single-threaded scheduler — alert the admin chat (throttled). 0 disables it.
          */
         private long slowTickAlertMs = 15_000;
+
+        /**
+         * How many products a tick scrapes concurrently. Bounds parallel Chrome instances when scrapes
+         * fall back to Selenium, so one slow product no longer blocks the rest of the tick (the scrape
+         * itself is still capped by {@code driver.page-load-timeout-seconds}). 1 keeps the old
+         * single-threaded scan; a tick with a single product never spins up a pool regardless.
+         */
+        private int scanThreads = 4;
     }
 
     @Getter
@@ -217,5 +226,28 @@ public class ZaraProperties {
          * Time zone for the cron. Blank = the JVM default zone.
          */
         private String zone = "";
+    }
+
+    /**
+     * CSS selectors for the Selenium fallback ({@code ZaraPageClient}), externalized so a Zara DOM
+     * change can be hotfixed via env/yaml without recompiling. Defaults are the last-known-good markup.
+     */
+    @Getter
+    @Setter
+    public static class Selectors {
+        private String productName = "h1[data-qa-qualifier='product-detail-info-name']";
+        private String addToCart = "button[data-qa-action='add-to-cart']";
+        private String viewSimilar = "button[data-qa-action='show-similar-products']";
+        private String sizeRow = "ul.size-selector-sizes > li";
+        private String sizeLabel = "div[data-qa-qualifier='size-selector-sizes-size-label']";
+        private String sizeButton = "button[data-qa-action^='size-']";
+        private String cookieAccept = "button#onetrust-accept-btn-handler";
+        private String priceCurrent =
+                "[data-qa-qualifier='price-amount-current'], .price__amount--current .money-amount__main";
+
+        /**
+         * Substring in the size button's data-qa-action that marks it in stock (e.g. "size-in-stock").
+         */
+        private String inStockMarker = "in-stock";
     }
 }

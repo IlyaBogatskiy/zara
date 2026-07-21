@@ -87,6 +87,7 @@ class MonitoringSchedulerTest {
         props.getMonitor().setBurstConfirm(true);
         props.getMonitor().setBurstConfirmDelayMs(0);
         props.getMonitor().setBurstConfirmMaxPerTick(maxPerTick);
+        props.getMonitor().setScanThreads(1);
         return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot, adminNotifier, new ActivityStats()), props, adminNotifier);
     }
 
@@ -100,6 +101,7 @@ class MonitoringSchedulerTest {
         props.getMonitor().setBurstConfirmMaxPerTick(3);
         props.getMonitor().setAntiFlapCooldownTicks(cooldownTicks);
         props.getMonitor().setFlapQuarantineTicks(quarantineTicks);
+        props.getMonitor().setScanThreads(1);
         return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot, adminNotifier, new ActivityStats()), props, adminNotifier);
     }
 
@@ -109,6 +111,7 @@ class MonitoringSchedulerTest {
         props.getMonitor().setBurstConfirm(false);
         props.getMonitor().setStallAlertMs(stallAlertMs);
         props.getMonitor().setSlowTickAlertMs(slowTickAlertMs);
+        props.getMonitor().setScanThreads(1);
         return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot, adminNotifier, new ActivityStats()), props, adminNotifier);
     }
 
@@ -502,6 +505,57 @@ class MonitoringSchedulerTest {
         assertThat(messages).hasSize(1);
         assertThat(textOf(messages.getFirst())).contains("Test product", "Product B",
                 "Размер S", "Размер M", "Размер L", "Размер XL", "появился");
+    }
+
+    /**
+     * Parallel scan (scan-threads > 1, the default): several products across several chats scanned
+     * concurrently still produce one correctly-merged report per chat, and every product's state is
+     * persisted — a guard that per-product parallelism touches only its own state and never crosses
+     * chats.
+     */
+    @Test
+    void parallelScanMergesPerChatAndPersistsEveryProduct() {
+        final var keyB = "07654321";
+        final var linkB = "https://www.zara.com/me/en/b-p07654321.html?v1=1";
+        final var refB = new SubscriptionService.ProductRef(linkB, "Product B");
+        final var keyC = "01234567";
+        final var linkC = "https://www.zara.com/me/en/c-p01234567.html?v1=1";
+        final var refC = new SubscriptionService.ProductRef(linkC, "Product C");
+
+        when(subscriptionService.loadLastKnown()).thenReturn(Map.of(
+                KEY, Map.of("S", false),
+                keyB, Map.of("L", false),
+                keyC, Map.of("M", false)));
+        when(subscriptionService.loadLastKnownPrices()).thenReturn(Map.of());
+        scheduler.seedLastKnown();
+
+        when(subscriptionService.activeProductKeys())
+                .thenReturn(new LinkedHashSet<>(List.of(KEY, keyB, keyC)));
+        when(subscriptionService.getProductRef(KEY)).thenReturn(REF);
+        when(subscriptionService.getProductRef(keyB)).thenReturn(refB);
+        when(subscriptionService.getProductRef(keyC)).thenReturn(refC);
+        when(pageService.checkProductSizesAvailability(LINK))
+                .thenReturn(new ProductSnapshot(Map.of("S", true, "*", true), null));
+        when(pageService.checkProductSizesAvailability(linkB))
+                .thenReturn(new ProductSnapshot(Map.of("L", true, "*", true), null));
+        when(pageService.checkProductSizesAvailability(linkC))
+                .thenReturn(new ProductSnapshot(Map.of("M", true, "*", true), null));
+        when(subscriptionService.getActiveWatches(KEY)).thenReturn(List.of(watch(1L, "S", AWAIT_RESTOCK)));
+        when(subscriptionService.getActiveWatches(keyB)).thenReturn(List.of(watch(2L, "L", AWAIT_RESTOCK)));
+        when(subscriptionService.getActiveWatches(keyC)).thenReturn(List.of(watch(1L, "M", AWAIT_RESTOCK)));
+
+        scheduler.monitor();
+
+        verify(subscriptionService).recordCheck(eq(KEY), any());
+        verify(subscriptionService).recordCheck(eq(keyB), any());
+        verify(subscriptionService).recordCheck(eq(keyC), any());
+
+        final var messages = sentMessages();
+        assertThat(messages).hasSize(2);
+        assertThat(messages).anySatisfy(m -> assertThat(textOf(m))
+                .contains("Test product", "Размер S", "Product C", "Размер M", "появился"));
+        assertThat(messages).anySatisfy(m -> assertThat(textOf(m))
+                .contains("Product B", "Размер L", "появился"));
     }
 
     /**

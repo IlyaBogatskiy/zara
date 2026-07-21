@@ -49,7 +49,7 @@ public class PageServiceImpl implements PageService {
         final var wait = webDriverFactory.createWait(driver);
 
         try {
-            final var client = new ZaraPageClient(driver, wait);
+            final var client = new ZaraPageClient(driver, wait, this.properties.getSelectors());
             return client.loadProductCard(link);
         } catch (final ZaraParsingException e) {
             this.adminNotifier.alert("selenium-parsing",
@@ -85,7 +85,7 @@ public class PageServiceImpl implements PageService {
         final var wait = webDriverFactory.createWait(driver);
 
         try {
-            final var client = new ZaraPageClient(driver, wait);
+            final var client = new ZaraPageClient(driver, wait, this.properties.getSelectors());
             return client.checkSizesAvailability(link);
         } catch (final ZaraParsingException e) {
             this.adminNotifier.alert("selenium-parsing",

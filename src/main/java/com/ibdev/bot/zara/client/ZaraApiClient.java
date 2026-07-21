@@ -47,7 +47,14 @@ public class ZaraApiClient {
      * ZaraPageClient.checkSizesAvailability.
      */
     public ProductSnapshot checkSizesAvailability(final String link) {
-        final var match = findColor(link);
+        return toSnapshot(findColor(link));
+    }
+
+    /**
+     * Builds the availability snapshot from a matched color node — the pure parse step, separated from
+     * fetching so it can be exercised offline against a saved JSON fixture (see ZaraApiClientParsingTest).
+     */
+    ProductSnapshot toSnapshot(final ColorMatch match) {
         if (match == null) {
             return null;
         }
@@ -90,7 +97,14 @@ public class ZaraApiClient {
      * (sizeAvailability=true means in stock), so the user can pick any size to track.
      */
     public ProductCard loadProductCard(final String link) {
-        final var match = findColor(link);
+        return toCard(findColor(link), link);
+    }
+
+    /**
+     * Builds the product card from a matched color node — the pure parse step, separated from fetching
+     * so it can be exercised offline against a saved JSON fixture (see ZaraApiClientParsingTest).
+     */
+    ProductCard toCard(final ColorMatch match, final String link) {
         if (match == null) {
             return null;
         }
@@ -135,7 +149,7 @@ public class ZaraApiClient {
         return new PriceInfo(amount.asLong(), (code == null || code.isBlank()) ? null : code, -exponent);
     }
 
-    private record ColorMatch(String productName, JsonNode color) {
+    record ColorMatch(String productName, JsonNode color) {
     }
 
     private ColorMatch findColor(final String link) {
@@ -150,8 +164,14 @@ public class ZaraApiClient {
         final var endpoint = "https://www.zara.com" + storePath
                 + "products-details?productIds=" + colorProductId + "&ajax=true";
 
-        final var body = fetchWithRetry(endpoint);
+        return matchFromBody(fetchWithRetry(endpoint), colorProductId);
+    }
 
+    /**
+     * Finds the color node whose productId matches within a raw response body — the pure parse step,
+     * separated from fetching so it can be exercised offline against a saved JSON fixture.
+     */
+    ColorMatch matchFromBody(final String body, final String colorProductId) {
         final var root = this.jsonMapper.readTree(body);
         if (root == null || !root.isArray() || root.isEmpty()) {
             log.info("Zara API returned no products for productId {}.", colorProductId);

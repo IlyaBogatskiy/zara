@@ -2,7 +2,7 @@ server:
   port: 8100
 ---
 telegram:
-  token: ${TELEGRAM_BOT_TOKEN:8246166840:AAFbWry69EED8IEX3hUbL76kO4vW19SR_fQ}
+  token: ${TELEGRAM_BOT_TOKEN}   # required; set via env / .env — no committed default (rotate any previously committed token)
 ---
 zara:
   monitor:
@@ -15,6 +15,7 @@ zara:
     flap-quarantine-ticks: 60        # once flapping, mute a size's restocks for N ticks (~30 min at 30s period) -> at most one false pair, then quiet
     stall-alert-ms: 300000           # resuming tick alerts admin if the gap since the last tick exceeds this (~monitoring outage); 0 disables
     slow-tick-alert-ms: 15000        # alert admin (throttled) when a single tick exceeds this — usually a blocking Selenium fallback; 0 disables
+    scan-threads: 4                  # products scraped concurrently per tick (bounds parallel Chrome on Selenium fallback); 1 = single-threaded scan
   api:
     enabled: true       # fast JSON path; false — Selenium only
     degraded-window: 20      # sliding window of recent API attempts for the degradation watchdog; 0 disables
@@ -37,6 +38,16 @@ zara:
     zone: ""                 # blank = JVM default zone
     max-entries: 5000        # ring-buffer cap; older WARN/ERROR dropped (count reported in the digest)
   admin-chat-id: ${ZARA_ADMIN_CHAT_ID:0}   # operator chatId for alerts + daily log digest; 0 = log only
+  selectors:                 # Selenium-fallback CSS selectors — hotfix a Zara DOM change here without recompiling
+    product-name: "h1[data-qa-qualifier='product-detail-info-name']"
+    add-to-cart: "button[data-qa-action='add-to-cart']"
+    view-similar: "button[data-qa-action='show-similar-products']"
+    size-row: "ul.size-selector-sizes > li"
+    size-label: "div[data-qa-qualifier='size-selector-sizes-size-label']"
+    size-button: "button[data-qa-action^='size-']"
+    cookie-accept: "button#onetrust-accept-btn-handler"
+    price-current: "[data-qa-qualifier='price-amount-current'], .price__amount--current .money-amount__main"
+    in-stock-marker: "in-stock"   # substring in the size button's data-qa-action that means in stock
 ---
 spring:
   datasource:
@@ -47,7 +58,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update   # dev only; switch to validate in production
+      ddl-auto: ${DB_DDL_AUTO:validate}   # prod-safe default; dev/docker set DB_DDL_AUTO=update to auto-create, tests use create-drop
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect

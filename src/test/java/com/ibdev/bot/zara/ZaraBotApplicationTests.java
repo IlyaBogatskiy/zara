@@ -11,7 +11,10 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * @author i.bogatskii
  */
 @Testcontainers
-@SpringBootTest(properties = "telegram.token=000:test-dummy")
+@SpringBootTest(properties = {
+        "telegram.token=000:test-dummy",
+        "spring.jpa.hibernate.ddl-auto=create-drop"
+})
 class ZaraBotApplicationTests {
 
     @Container

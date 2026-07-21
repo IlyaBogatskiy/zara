@@ -71,7 +71,8 @@ public class SelectorCanary {
         try {
             final Map<String, Boolean> viaSelenium;
             try {
-                viaSelenium = new ZaraPageClient(driver, wait).checkSizesAvailability(ref.link()).sizes();
+                viaSelenium = new ZaraPageClient(driver, wait, this.properties.getSelectors())
+                        .checkSizesAvailability(ref.link()).sizes();
             } catch (final Exception e) {
                 this.adminNotifier.alert(
                         "canary-selenium",
