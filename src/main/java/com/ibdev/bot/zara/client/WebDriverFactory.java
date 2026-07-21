@@ -28,6 +28,12 @@ public class WebDriverFactory {
     private final ZaraProperties properties;
 
     public WebDriver create() {
+        final var driver = newDriver();
+        configureTimeouts(driver);
+        return driver;
+    }
+
+    private WebDriver newDriver() {
         final var remoteUrl = properties.getDriver().getRemoteUrl();
         if (remoteUrl == null || remoteUrl.isBlank()) {
             return new ChromeDriver(chromeOptions);
@@ -38,6 +44,19 @@ public class WebDriverFactory {
         } catch (final MalformedURLException e) {
             throw new IllegalStateException("Invalid zara.driver.remote-url: " + remoteUrl, e);
         }
+    }
+
+    /**
+     * Caps a single {@code driver.get} so a hung scrape (challenge page / stalled network) fails fast
+     * instead of blocking the single-threaded scheduler for the driver's ~300 s default. A non-positive
+     * {@code page-load-timeout-seconds} leaves the driver default untouched.
+     */
+    void configureTimeouts(final WebDriver driver) {
+        final var seconds = properties.getDriver().getPageLoadTimeoutSeconds();
+        if (seconds <= 0) {
+            return;
+        }
+        driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(seconds));
     }
 
     public WebDriverWait createWait(final WebDriver driver) {

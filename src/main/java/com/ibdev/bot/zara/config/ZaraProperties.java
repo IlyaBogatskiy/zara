@@ -64,6 +64,14 @@ public class ZaraProperties {
         private int waitSeconds = 15;
 
         /**
+         * Hard cap on a single page load ({@code driver.get}), in seconds. Bounds a hung Selenium
+         * scrape (challenge page / stalled network) so it fails fast instead of blocking the
+         * single-threaded scheduler for the driver's default (~300 s). 0 disables the cap. Keep it
+         * above a healthy page load (a few seconds) yet well under the observed 50–120 s stalls.
+         */
+        private int pageLoadTimeoutSeconds = 20;
+
+        /**
          * Remote WebDriver URL (Selenium Grid / standalone-chrome); blank — local ChromeDriver.
          */
         private String remoteUrl = "";

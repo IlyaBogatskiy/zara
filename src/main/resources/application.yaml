@@ -21,6 +21,7 @@ zara:
     degraded-threshold: 0.5  # fallback-to-Selenium rate over the window that triggers an admin alert
   driver:
     wait-seconds: 15
+    page-load-timeout-seconds: 20   # hard cap on driver.get(); fails a hung scrape fast instead of blocking the scheduler ~300s. 0 = driver default
     remote-url: ${ZARA_DRIVER_REMOTE_URL:}   # Selenium Grid URL; blank = local ChromeDriver
   canary:
     enabled: true       # periodic Selenium-vs-API cross-check
