@@ -11,8 +11,8 @@ zara:
     burst-confirm: true              # on a watched change, fetch the confirming observation now (fast re-scrape) instead of waiting a full period
     burst-confirm-delay-ms: 3000     # pause before the confirming re-scrape (tune on prod)
     burst-confirm-max-per-tick: 3    # cap burst re-scrapes per tick; the rest fall back to cross-tick debounce
-    anti-flap-cooldown-ticks: 3      # after a size flips, bar it from burst for N ticks; an opposite flip within N ticks = a flap -> quarantine (0 disables anti-flap)
-    flap-quarantine-ticks: 60        # once flapping, mute a size's restocks for N ticks (~30 min at 30s period) -> at most one false pair, then quiet
+    anti-flap-cooldown-ticks: 0      # DISABLED for sale monitoring: quarantine muted real rapid restocks up to ~30 min. Cache-bust removed the stale-CDN false-flap cause, and the debounce (confirmations) still filters single-tick blips. Set >0 to re-enable.
+    flap-quarantine-ticks: 60        # (only used when anti-flap-cooldown-ticks > 0) once flapping, mute a size's restocks for N ticks (~30 min at 30s period)
     stall-alert-ms: 300000           # resuming tick alerts admin if the gap since the last tick exceeds this (~monitoring outage); 0 disables
     slow-tick-alert-ms: 15000        # alert admin (throttled) when a single tick exceeds this — usually a blocking Selenium fallback; 0 disables
     scan-threads: 4                  # products scraped concurrently per tick (bounds parallel Chrome on Selenium fallback); 1 = single-threaded scan
