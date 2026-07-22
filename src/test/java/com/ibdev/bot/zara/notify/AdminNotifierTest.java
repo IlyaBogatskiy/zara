@@ -25,7 +25,7 @@ class AdminNotifierTest {
     private AdminNotifier notifier(final Long adminChatId) {
         final var props = new ZaraProperties();
         props.setAdminChatId(adminChatId);
-        return new AdminNotifier(telegramBot, props);
+        return new AdminNotifier(telegramBot, props, new RecentEvents());
     }
 
     @Test

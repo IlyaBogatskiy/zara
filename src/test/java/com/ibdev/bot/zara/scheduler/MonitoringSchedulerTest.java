@@ -77,7 +77,7 @@ class MonitoringSchedulerTest {
         props.getMonitor().setConfirmations(confirmations);
         props.getMonitor().setConfirmRestockViaSelenium(confirmViaSelenium);
         props.getMonitor().setBurstConfirm(false);
-        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot, adminNotifier, new ActivityStats()), props, adminNotifier);
+        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot, adminNotifier, new ActivityStats(), new com.ibdev.bot.zara.notify.RecentEvents()), props, adminNotifier);
     }
 
     private MonitoringScheduler burstScheduler(final int confirmations, final int maxPerTick) {
@@ -88,7 +88,7 @@ class MonitoringSchedulerTest {
         props.getMonitor().setBurstConfirmDelayMs(0);
         props.getMonitor().setBurstConfirmMaxPerTick(maxPerTick);
         props.getMonitor().setScanThreads(1);
-        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot, adminNotifier, new ActivityStats()), props, adminNotifier);
+        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot, adminNotifier, new ActivityStats(), new com.ibdev.bot.zara.notify.RecentEvents()), props, adminNotifier);
     }
 
     private MonitoringScheduler antiFlapScheduler(
@@ -102,7 +102,7 @@ class MonitoringSchedulerTest {
         props.getMonitor().setAntiFlapCooldownTicks(cooldownTicks);
         props.getMonitor().setFlapQuarantineTicks(quarantineTicks);
         props.getMonitor().setScanThreads(1);
-        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot, adminNotifier, new ActivityStats()), props, adminNotifier);
+        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot, adminNotifier, new ActivityStats(), new com.ibdev.bot.zara.notify.RecentEvents()), props, adminNotifier);
     }
 
     private MonitoringScheduler watchdogScheduler(final long stallAlertMs, final long slowTickAlertMs) {
@@ -112,7 +112,7 @@ class MonitoringSchedulerTest {
         props.getMonitor().setStallAlertMs(stallAlertMs);
         props.getMonitor().setSlowTickAlertMs(slowTickAlertMs);
         props.getMonitor().setScanThreads(1);
-        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot, adminNotifier, new ActivityStats()), props, adminNotifier);
+        return new MonitoringScheduler(subscriptionService, pageService, new UserNotifier(telegramBot, adminNotifier, new ActivityStats(), new com.ibdev.bot.zara.notify.RecentEvents()), props, adminNotifier);
     }
 
     private static Watch watch(final long chatId, final String size, final com.ibdev.bot.zara.storage.model.SubscriptionMode mode) {

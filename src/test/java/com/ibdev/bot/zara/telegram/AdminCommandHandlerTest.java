@@ -37,12 +37,13 @@ class AdminCommandHandlerTest {
     private SubscriptionService subscriptionService;
 
     private AdminCommandHandler handler;
+    private final ChatDirectory chatDirectory = new ChatDirectory();
 
     @BeforeEach
     void setUp() {
         final var props = new ZaraProperties();
         props.setAdminChatId(ADMIN);
-        handler = new AdminCommandHandler(subscriptionService, props);
+        handler = new AdminCommandHandler(subscriptionService, props, chatDirectory);
 
         when(subscriptionService.activeProductKeys()).thenReturn(new LinkedHashSet<>(List.of("K1", "K2")));
         when(subscriptionService.getActiveWatches("K1"))
@@ -122,5 +123,42 @@ class AdminCommandHandlerTest {
         final var reply = handler.tryHandle(ADMIN, "/admin").orElseThrow();
 
         assertThat(reply).contains("Админ-команды", "/stats", "/product", "/chat");
+    }
+
+    @Test
+    void menuButtonDataListsProductsAndDistinctChats() {
+        assertThat(handler.menuProductKeys()).containsExactly("K1", "K2");
+        assertThat(handler.menuChatIds()).containsExactly(1L, 2L);
+    }
+
+    @Test
+    void isAdminOnlyForConfiguredChat() {
+        assertThat(handler.isAdmin(ADMIN)).isTrue();
+        assertThat(handler.isAdmin(OTHER)).isFalse();
+    }
+
+    @Test
+    void searchFindsProductsByKeyOrName() {
+        assertThat(handler.searchProductKeys("курт")).containsExactly("K1");
+        assertThat(handler.searchProductKeys("K2")).containsExactly("K2");
+        assertThat(handler.searchProductKeys("zzz")).isEmpty();
+    }
+
+    @Test
+    void searchFindsChatsByIdOrUsername() {
+        chatDirectory.record(1L, "alice", "Alice", null);
+
+        assertThat(handler.searchChatIds("alice")).containsExactly(1L);
+        assertThat(handler.searchChatIds("2")).containsExactly(2L);
+        assertThat(handler.searchChatIds("zzz")).isEmpty();
+    }
+
+    @Test
+    void chatViewsShowUsernameWhenKnown() {
+        chatDirectory.record(1L, "alice", "Alice", null);
+
+        assertThat(handler.tryHandle(ADMIN, "/chats").orElseThrow()).contains("чат 1 · @alice");
+        assertThat(handler.tryHandle(ADMIN, "/chat 1").orElseThrow()).contains("чат 1 · @alice");
+        assertThat(handler.tryHandle(ADMIN, "/product K1").orElseThrow()).contains("чат 1 · @alice");
     }
 }

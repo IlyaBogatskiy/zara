@@ -7,6 +7,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -78,5 +79,72 @@ class ApiHealthTrackerTest {
         feed(tracker, false, 50);
 
         verify(adminNotifier, never()).alert(any(), any());
+    }
+
+    private ApiHealthTracker breaker(final int tripThreshold, final long cooldownMs) {
+        final var props = new ZaraProperties();
+        props.getApi().setDegradedWindow(0);
+        props.getApi().setBreakerTripThreshold(tripThreshold);
+        props.getApi().setBreakerCooldownMs(cooldownMs);
+        return new ApiHealthTracker(props, adminNotifier);
+    }
+
+    @Test
+    void breakerClosedInitiallyTriesApi() {
+        assertThat(breaker(2, 1000).shouldTryApi(0)).isTrue();
+    }
+
+    @Test
+    void breakerTripsAfterConsecutiveFailures() {
+        final var t = breaker(2, 1000);
+
+        t.recordApiOutcome(false, 0);
+        assertThat(t.shouldTryApi(0)).as("1 failure — not yet tripped").isTrue();
+        t.recordApiOutcome(false, 0);
+        assertThat(t.shouldTryApi(500)).as("2 failures — open during cooldown").isFalse();
+    }
+
+    @Test
+    void breakerHalfOpensAfterCooldown() {
+        final var t = breaker(2, 1000);
+        t.recordApiOutcome(false, 0);
+        t.recordApiOutcome(false, 0);
+
+        assertThat(t.shouldTryApi(500)).isFalse();
+        assertThat(t.shouldTryApi(1000)).as("cooldown elapsed — re-probe").isTrue();
+    }
+
+    @Test
+    void breakerClosesOnSuccessfulProbe() {
+        final var t = breaker(2, 1000);
+        t.recordApiOutcome(false, 0);
+        t.recordApiOutcome(false, 0);
+
+        t.recordApiOutcome(true, 1000);
+
+        assertThat(t.shouldTryApi(1001)).isTrue();
+    }
+
+    @Test
+    void breakerReopensOnFailedProbe() {
+        final var t = breaker(2, 1000);
+        t.recordApiOutcome(false, 0);
+        t.recordApiOutcome(false, 0);
+
+        t.recordApiOutcome(false, 1000);
+
+        assertThat(t.shouldTryApi(1500)).as("failed probe re-opens").isFalse();
+        assertThat(t.shouldTryApi(2000)).isTrue();
+    }
+
+    @Test
+    void breakerDisabledWhenThresholdZero() {
+        final var t = breaker(0, 1000);
+
+        t.recordApiOutcome(false, 0);
+        t.recordApiOutcome(false, 0);
+        t.recordApiOutcome(false, 0);
+
+        assertThat(t.shouldTryApi(0)).isTrue();
     }
 }

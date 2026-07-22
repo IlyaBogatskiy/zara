@@ -63,6 +63,7 @@ public class UserNotifier {
     private final TelegramBot telegramBot;
     private final AdminNotifier adminNotifier;
     private final ActivityStats activityStats;
+    private final RecentEvents recentEvents;
 
     /**
      * Sends one consolidated report to a chat for everything that changed this tick.
@@ -93,6 +94,7 @@ public class UserNotifier {
             }
             for (final var event : group) {
                 this.activityStats.record(event);
+                this.recentEvents.record(describe(event, chatId));
                 text.append(renderLine(event)).append("\n");
                 hasButtons |= appendButtons(keyboard, event, name);
             }
@@ -129,6 +131,22 @@ public class UserNotifier {
                     .append("\nМогу дополнительно следить за отсутствующими размерами — кнопка ниже.");
         }
         return sb.toString();
+    }
+
+    /**
+     * Compact one-liner for the admin recent-events feed (@link RecentEvents).
+     */
+    private String describe(final NotifyEvent event, final long chatId) {
+        final var name = event.productName();
+        final var tail = " · чат " + chatId;
+        return switch (event) {
+            case SizeAppeared s -> "✅ " + name + " " + s.size() + " появился" + tail;
+            case SizeSoldOut s -> "⚠️ " + name + " " + s.size() + " пропал" + tail;
+            case PriceMoved p -> "💰 " + name + " цена " + p.oldPrice().formatted()
+                    + "→" + p.newPrice().formatted() + tail;
+            case WholeAvailable ignored -> "✅ " + name + " появился целиком" + tail;
+            case WholeUnavailable ignored -> "❌ " + name + " пропал целиком" + tail;
+        };
     }
 
     /**

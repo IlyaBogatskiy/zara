@@ -39,7 +39,10 @@ public class ZaraApiClient {
     private static final Set<String> IN_STOCK_VALUES = Set.of("in_stock", LOW_ON_STOCK);
 
     private final RestClient zaraRestClient;
+    private final com.ibdev.bot.zara.config.ZaraProperties properties;
     private final JsonMapper jsonMapper = JsonMapper.builder().build();
+    private final java.util.concurrent.atomic.AtomicLong cacheBustSeq =
+            new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
 
     /**
      * Live snapshot: size availability (size → inStock, plus WHOLE "*" → whether any
@@ -161,10 +164,21 @@ public class ZaraApiClient {
             return null;
         }
 
+        return matchFromBody(fetchWithRetry(buildEndpoint(storePath, colorProductId)), colorProductId);
+    }
+
+    /**
+     * Builds the products-details URL, appending a unique cache-bust param (when {@code api.cache-bust}
+     * is on) so Akamai returns fresh availability instead of its ~9 min edge cache — the fix for late
+     * restock alerts. The seq is seeded from wall-clock so it stays unique across restarts too.
+     */
+    String buildEndpoint(final String storePath, final String colorProductId) {
         final var endpoint = "https://www.zara.com" + storePath
                 + "products-details?productIds=" + colorProductId + "&ajax=true";
-
-        return matchFromBody(fetchWithRetry(endpoint), colorProductId);
+        if (this.properties.getApi().isCacheBust()) {
+            return endpoint + "&_=" + this.cacheBustSeq.incrementAndGet();
+        }
+        return endpoint;
     }
 
     /**

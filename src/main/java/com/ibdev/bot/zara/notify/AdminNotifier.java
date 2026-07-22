@@ -26,11 +26,13 @@ public class AdminNotifier {
 
     private final TelegramBot telegramBot;
     private final ZaraProperties properties;
+    private final RecentEvents recentEvents;
 
     private final Map<String, Long> lastAlertAt = new ConcurrentHashMap<>();
 
     public void alert(final String key, final String message) {
         log.error("ALERT [{}]: {}", key, message);
+        this.recentEvents.record("🔧 " + firstLine(message));
 
         final var adminChatId = this.properties.getAdminChatId();
         if (adminChatId == null || adminChatId == 0) {
@@ -59,6 +61,7 @@ public class AdminNotifier {
      */
     public void notice(final String message) {
         log.info("ADMIN NOTICE: {}", message);
+        this.recentEvents.record("ℹ️ " + firstLine(message));
 
         final var adminChatId = this.properties.getAdminChatId();
         if (adminChatId == null || adminChatId == 0) {
@@ -70,5 +73,17 @@ public class AdminNotifier {
         } catch (final Exception e) {
             log.error("Failed to deliver admin notice: {}", e.getMessage());
         }
+    }
+
+    /**
+     * First line of a (possibly multi-line) message, truncated — the recent-events feed stays compact.
+     */
+    private String firstLine(final String message) {
+        if (message == null) {
+            return "";
+        }
+        final var nl = message.indexOf('\n');
+        final var line = (nl >= 0 ? message.substring(0, nl) : message).strip();
+        return line.length() > 120 ? line.substring(0, 120) + "…" : line;
     }
 }

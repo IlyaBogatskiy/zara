@@ -18,4 +18,9 @@ public class ChatSession {
 
     private volatile ProductCard lastCard;
     private volatile boolean trackWholeProduct;
+
+    /**
+     * Set when the admin taps 🔎 Поиск — the next plain message is treated as the search query.
+     */
+    private volatile boolean awaitingAdminSearch;
 }

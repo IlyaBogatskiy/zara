@@ -31,7 +31,7 @@ public class PageServiceImpl implements PageService {
 
     @Override
     public ProductCard loadProductCard(final String link) {
-        if (this.properties.getApi().isEnabled()) {
+        if (this.properties.getApi().isEnabled() && this.apiHealthTracker.shouldTryApi()) {
             try {
                 final var viaApi = this.zaraApiClient.loadProductCard(link);
                 if (viaApi != null) {
@@ -62,7 +62,7 @@ public class PageServiceImpl implements PageService {
 
     @Override
     public ProductSnapshot checkProductSizesAvailability(final String link) {
-        if (this.properties.getApi().isEnabled()) {
+        if (this.properties.getApi().isEnabled() && this.apiHealthTracker.shouldTryApi()) {
             try {
                 final var viaApi = this.zaraApiClient.checkSizesAvailability(link);
                 if (viaApi != null && viaApi.sizes() != null && !viaApi.sizes().isEmpty()) {

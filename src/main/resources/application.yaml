@@ -18,8 +18,11 @@ zara:
     scan-threads: 4                  # products scraped concurrently per tick (bounds parallel Chrome on Selenium fallback); 1 = single-threaded scan
   api:
     enabled: true       # fast JSON path; false — Selenium only
+    cache-bust: true    # append a unique param so Akamai returns FRESH data, not its ~9-min edge cache (fixes late restock alerts); false = allow caching
     degraded-window: 20      # sliding window of recent API attempts for the degradation watchdog; 0 disables
     degraded-threshold: 0.5  # fallback-to-Selenium rate over the window that triggers an admin alert
+    breaker-trip-threshold: 2    # circuit breaker: skip the API (straight to Selenium) after N consecutive API failures; 0 disables
+    breaker-cooldown-ms: 120000  # stay on Selenium this long before re-probing the API once (recovers automatically)
   driver:
     wait-seconds: 15
     page-load-timeout-seconds: 20   # hard cap on driver.get(); fails a hung scrape fast instead of blocking the scheduler ~300s. 0 = driver default

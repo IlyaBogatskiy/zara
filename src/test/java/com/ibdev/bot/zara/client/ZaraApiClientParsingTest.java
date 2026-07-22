@@ -1,5 +1,6 @@
 package com.ibdev.bot.zara.client;
 
+import com.ibdev.bot.zara.config.ZaraProperties;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -21,7 +22,7 @@ class ZaraApiClientParsingTest {
     private static final String LINK =
             "https://www.zara.com/me/en/100-extra-soft-wool-jumper-p09598104.html?v1=" + COLOR_PRODUCT_ID;
 
-    private final ZaraApiClient client = new ZaraApiClient(null);
+    private final ZaraApiClient client = new ZaraApiClient(null, new ZaraProperties());
 
     private String fixture() throws Exception {
         try (var in = getClass().getResourceAsStream("/fixtures/zara-products-details.json")) {
@@ -53,6 +54,26 @@ class ZaraApiClientParsingTest {
         assertThat(snapshot.price().amount()).isEqualTo(1198L);
         assertThat(snapshot.price().currency()).isEqualTo("EUR");
         assertThat(snapshot.price().fractionDigits()).isEqualTo(2);
+    }
+
+    @Test
+    void buildEndpointAppendsUniqueCacheBustWhenEnabled() {
+        final var c = new ZaraApiClient(null, new ZaraProperties());
+
+        final var url1 = c.buildEndpoint("/me/en/", "123");
+        final var url2 = c.buildEndpoint("/me/en/", "123");
+
+        assertThat(url1).startsWith("https://www.zara.com/me/en/products-details?productIds=123&ajax=true&_=");
+        assertThat(url1).isNotEqualTo(url2);
+    }
+
+    @Test
+    void buildEndpointOmitsCacheBustWhenDisabled() {
+        final var props = new ZaraProperties();
+        props.getApi().setCacheBust(false);
+
+        assertThat(new ZaraApiClient(null, props).buildEndpoint("/me/en/", "123"))
+                .isEqualTo("https://www.zara.com/me/en/products-details?productIds=123&ajax=true");
     }
 
     @Test

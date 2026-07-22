@@ -54,9 +54,15 @@ public class MonitoringScheduler {
      * Wall-clock end of the previous completed tick, for the outage watchdog. 0 = no tick yet. A
      * resuming tick whose gap since this exceeds {@code zara.monitor.stall-alert-ms} reports the
      * outage window (during which stock changes were missed). Single-threaded scheduler, so this is
-     * only ever read/written on the scheduling thread.
+     * only ever read/written on the scheduling thread (volatile so the admin status screen can read it
+     * from the Telegram thread without a stale value).
      */
-    private long lastTickCompletedAt;
+    private volatile long lastTickCompletedAt;
+
+    /**
+     * Duration of the last completed tick, ms — for the admin status screen.
+     */
+    private volatile long lastTickDurationMs;
 
     /**
      * Last <em>confirmed</em> size availability: productKey → (size → inStock).
@@ -94,7 +100,7 @@ public class MonitoringScheduler {
      * anti-flap cooldown and quarantine, which reason in ticks (≈ periods) rather than wall-clock so
      * they stay deterministic and clock-free.
      */
-    private long tick;
+    private volatile long tick;
 
     private static final class Pending {
         private final boolean value;
@@ -183,7 +189,29 @@ public class MonitoringScheduler {
         log.info("Monitoring tick finished: {} product(s), {} chat report(s) in {} ms.",
                 productKeys.size(), reports.size(), durationMs);
         alertOnSlowTick(durationMs);
+        this.lastTickDurationMs = durationMs;
         this.lastTickCompletedAt = finishedAt;
+    }
+
+    /**
+     * Read-only monitoring health for the admin status screen. Safe to call from another thread: the
+     * counters are volatile and {@link #flipHistory} (with a concurrent inner map) is only iterated.
+     */
+    public record MonitoringStatus(long tick, long lastTickCompletedAt, long lastTickDurationMs,
+                                   List<String> quarantinedSizes) {
+    }
+
+    public MonitoringStatus status() {
+        final var now = this.tick;
+        final var quarantined = new ArrayList<String>();
+        for (final var product : this.flipHistory.entrySet()) {
+            for (final var size : product.getValue().entrySet()) {
+                if (now < size.getValue().quarantinedUntilTick) {
+                    quarantined.add(product.getKey() + " " + size.getKey());
+                }
+            }
+        }
+        return new MonitoringStatus(now, this.lastTickCompletedAt, this.lastTickDurationMs, quarantined);
     }
 
     /**
@@ -576,7 +604,7 @@ public class MonitoringScheduler {
         if (cooldown <= 0) {
             return;
         }
-        final var history = this.flipHistory.computeIfAbsent(productKey, k -> new HashMap<>());
+        final var history = this.flipHistory.computeIfAbsent(productKey, k -> new ConcurrentHashMap<>());
         for (final var entry : current.entrySet()) {
             final var size = entry.getKey();
             if (WHOLE.getSize().equals(size)) {

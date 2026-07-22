@@ -42,6 +42,15 @@ public class ZaraProperties {
         private boolean enabled = true;
 
         /**
+         * Append a unique query param to every API request so Akamai serves fresh data instead of its
+         * edge cache. Zara's products-details response is {@code Cache-Control: max-age=531} (~9 min),
+         * so a cached read can report stale stock for minutes — the #1 cause of late restock alerts.
+         * Busting the cache keeps the API's speed (~0.4 s) while giving live availability. Turn off only
+         * if the always-origin traffic starts drawing Akamai's attention.
+         */
+        private boolean cacheBust = true;
+
+        /**
          * API-degradation watchdog: the size of the sliding window of recent API attempts over which
          * the fallback-to-Selenium rate is measured. When the rate exceeds {@link #degradedThreshold}
          * the admin chat is alerted (throttled) — an early sign Akamai is tightening and the bot is
@@ -54,6 +63,20 @@ public class ZaraProperties {
          * alert fires.
          */
         private double degradedThreshold = 0.5;
+
+        /**
+         * Circuit breaker: after this many consecutive failed API calls the API is skipped entirely
+         * (straight to Selenium) so monitoring keeps running without wasting a doomed API round-trip on
+         * every request. 0/negative disables the breaker (always try the API).
+         */
+        private int breakerTripThreshold = 2;
+
+        /**
+         * How long (ms) the breaker stays open — API skipped, Selenium used — before it re-probes the
+         * API once. On a successful probe it closes (back to the fast path); on a failed probe it
+         * re-opens for another cooldown.
+         */
+        private long breakerCooldownMs = 120_000;
     }
 
     @Getter

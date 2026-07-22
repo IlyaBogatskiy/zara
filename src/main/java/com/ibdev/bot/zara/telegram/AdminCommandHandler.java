@@ -37,6 +37,7 @@ public class AdminCommandHandler {
 
     private final SubscriptionService subscriptionService;
     private final ZaraProperties properties;
+    private final ChatDirectory chatDirectory;
 
     public Optional<String> tryHandle(final long chatId, final String text) {
         if (text == null || text.isBlank() || !isAdmin(chatId)) {
@@ -53,31 +54,88 @@ public class AdminCommandHandler {
 
         return switch (command) {
             case "admin" -> Optional.of(help());
-            case "stats" -> Optional.of(cap(overview()));
-            case "products" -> Optional.of(cap(products()));
-            case "product" -> Optional.of(cap(productDetails(argument)));
-            case "chats" -> Optional.of(cap(chats()));
-            case "chat" -> Optional.of(cap(chatDetails(argument)));
+            case "stats" -> Optional.of(overview());
+            case "products" -> Optional.of(products());
+            case "product" -> Optional.of(productDetails(argument));
+            case "chats" -> Optional.of(chats());
+            case "chat" -> Optional.of(chatDetails(argument));
             default -> Optional.empty();
         };
     }
 
-    private boolean isAdmin(final long chatId) {
+    public boolean isAdmin(final long chatId) {
         final var adminChatId = this.properties.getAdminChatId();
         return adminChatId != null && adminChatId != 0 && adminChatId == chatId;
     }
 
-    private String help() {
+    /**
+     * Product keys for the admin menu's per-product buttons — insertion order of the active set.
+     */
+    java.util.List<String> menuProductKeys() {
+        return new java.util.ArrayList<>(this.subscriptionService.activeProductKeys());
+    }
+
+    /**
+     * Distinct chat ids (sorted) for the admin menu's per-chat buttons.
+     */
+    java.util.List<Long> menuChatIds() {
+        final var chats = new java.util.TreeSet<Long>();
+        for (final var key : this.subscriptionService.activeProductKeys()) {
+            chats.addAll(this.subscriptionService.getSubscribersByProduct(key).keySet());
+        }
+        return new java.util.ArrayList<>(chats);
+    }
+
+    /**
+     * Products whose key or name contains the query (case-insensitive).
+     */
+    java.util.List<String> searchProductKeys(final String query) {
+        final var q = query == null ? "" : query.trim().toLowerCase();
+        if (q.isEmpty()) {
+            return java.util.List.of();
+        }
+        final var result = new java.util.ArrayList<String>();
+        for (final var key : menuProductKeys()) {
+            if (key.toLowerCase().contains(q) || nameOf(key).toLowerCase().contains(q)) {
+                result.add(key);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Chats whose id or {@link ChatDirectory} label (@username / name) contains the query.
+     */
+    java.util.List<Long> searchChatIds(final String query) {
+        final var q = query == null ? "" : query.trim().toLowerCase();
+        if (q.isEmpty()) {
+            return java.util.List.of();
+        }
+        final var result = new java.util.ArrayList<Long>();
+        for (final var id : menuChatIds()) {
+            if (String.valueOf(id).contains(q) || this.chatDirectory.label(id).toLowerCase().contains(q)) {
+                result.add(id);
+            }
+        }
+        return result;
+    }
+
+    String help() {
         return """
                 🛠 Админ-команды:
                 /stats — сводка (товары, чаты, подписки)
                 /products — список товаров и число подписчиков
                 /product <ключ> — кто следит за товаром и за какими размерами
                 /chats — список чатов и сколько товаров каждый отслеживает
-                /chat <id> — что отслеживает конкретный чат""";
+                /chat <id> — что отслеживает конкретный чат
+                /find <текст> — поиск по товарам и чатам
+                /fp <текст> — поиск только по товарам
+                /fc <текст> — поиск только по чатам
+                /status — состояние мониторинга (тик, API, флап, тумблеры)
+                /events — последние события (уведомления и алерты)""";
     }
 
-    private String overview() {
+    String overview() {
         final var products = this.subscriptionService.activeProductKeys();
         final var chats = new java.util.HashSet<Long>();
         var sizes = 0;
@@ -117,10 +175,10 @@ public class AdminCommandHandler {
                 .limit(5)
                 .forEach(e -> body.append("• ").append(nameOf(e.getKey()))
                         .append(" [").append(e.getKey()).append("] — ").append(e.getValue()).append(" чат.\n"));
-        return body.toString();
+        return cap(body.toString());
     }
 
-    private String products() {
+    String products() {
         final var keys = this.subscriptionService.activeProductKeys();
         if (keys.isEmpty()) {
             return "Нет активных товаров.";
@@ -134,10 +192,10 @@ public class AdminCommandHandler {
                     .append(" — ").append(subscribers.size()).append(" чат., размеры: ")
                     .append(allSizes.isEmpty() ? "—" : String.join(", ", allSizes)).append('\n');
         }
-        return body.toString();
+        return cap(body.toString());
     }
 
-    private String productDetails(final String key) {
+    String productDetails(final String key) {
         if (key.isBlank()) {
             return "Укажи ключ товара: /product <ключ>";
         }
@@ -161,11 +219,12 @@ public class AdminCommandHandler {
         final var price = this.subscriptionService.loadLastKnownPrices().get(key);
         body.append("Последняя цена: ").append(price == null ? "—" : price.formatted()).append('\n');
         body.append("Подписчики (").append(byChat.size()).append("):\n");
-        byChat.forEach((chatId, sizes) -> body.append("• чат ").append(chatId).append(": ").append(sizes.toString().trim()).append('\n'));
-        return body.toString();
+        byChat.forEach((chatId, sizes) -> body.append("• ").append(this.chatDirectory.label(chatId))
+                .append(": ").append(sizes.toString().trim()).append('\n'));
+        return cap(body.toString());
     }
 
-    private String chats() {
+    String chats() {
         final var counts = new TreeMap<Long, Integer>();
         for (final var key : this.subscriptionService.activeProductKeys()) {
             for (final var chatId : this.subscriptionService.getSubscribersByProduct(key).keySet()) {
@@ -176,11 +235,12 @@ public class AdminCommandHandler {
             return "Нет активных чатов.";
         }
         final var body = new StringBuilder("👤 Чаты (").append(counts.size()).append("):\n");
-        counts.forEach((chatId, n) -> body.append("• чат ").append(chatId).append(": ").append(n).append(" товар.\n"));
-        return body.toString();
+        counts.forEach((chatId, n) -> body.append("• ").append(this.chatDirectory.label(chatId))
+                .append(": ").append(n).append(" товар.\n"));
+        return cap(body.toString());
     }
 
-    private String chatDetails(final String argument) {
+    String chatDetails(final String argument) {
         final long chatId;
         try {
             chatId = Long.parseLong(argument.trim());
@@ -191,7 +251,7 @@ public class AdminCommandHandler {
         if (subs.isEmpty()) {
             return "Чат " + chatId + " ничего не отслеживает.";
         }
-        final var body = new StringBuilder("👤 Чат ").append(chatId).append('\n');
+        final var body = new StringBuilder("👤 ").append(this.chatDirectory.label(chatId)).append('\n');
         body.append("Отслеживает товаров: ").append(subs.size()).append('\n');
         subs.forEach((key, sizes) -> {
             final var modes = this.subscriptionService.getSubscribedSizeModes(chatId, key);
@@ -202,10 +262,10 @@ public class AdminCommandHandler {
             body.append("• ").append(nameOf(key)).append(" [").append(key).append("]: ")
                     .append(rendered.toString().trim()).append('\n');
         });
-        return body.toString();
+        return cap(body.toString());
     }
 
-    private String nameOf(final String key) {
+    String nameOf(final String key) {
         final var ref = this.subscriptionService.findProductRef(key);
         return ref == null ? "?" : ref.name();
     }

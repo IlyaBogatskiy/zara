@@ -52,6 +52,26 @@ public class ZaraTelegramListener {
     private static final String CB_UNSUB = "UNSUB";
     private static final String CB_NOOP = "NOOP";
 
+    private static final String ADM_STATS = "ADM_STATS";
+    private static final String ADM_STATUS = "ADM_STATUS";
+    private static final String ADM_EVENTS = "ADM_EVENTS";
+    private static final String ADM_PRODUCTS = "ADM_PRODUCTS";
+    private static final String ADM_PRODUCT_PREFIX = "ADM_PRODUCT:";
+    private static final String ADM_CHATS = "ADM_CHATS";
+    private static final String ADM_CHAT_PREFIX = "ADM_CHAT:";
+    private static final String ADM_PROD_PAGE_PREFIX = "ADM_PROD_PAGE:";
+    private static final String ADM_CHAT_PAGE_PREFIX = "ADM_CHAT_PAGE:";
+    private static final String ADM_NOOP = "ADM_NOOP";
+    private static final int ADMIN_PAGE_SIZE = 8;
+    private static final String ADM_BTN_STATS = "📊 Статистика";
+    private static final String ADM_BTN_PRODUCTS = "📦 Товары";
+    private static final String ADM_BTN_CHATS = "👤 Чаты";
+    private static final String ADM_BTN_SEARCH = "🔎 Поиск";
+    private static final String ADM_BTN_STATUS = "🩺 Статус";
+    private static final String ADM_BTN_EVENTS = "🕓 События";
+    private static final String ADM_BTN_HELP = "ℹ️ Помощь";
+    private static final int ADMIN_SEARCH_CAP = 20;
+
 
     private final SessionCache sessionCache;
     private final TelegramBot telegramBot;
@@ -59,6 +79,8 @@ public class ZaraTelegramListener {
     private final SubscriptionService subscriptionService;
     private final ScrapingExecutor scrapingExecutor;
     private final AdminCommandHandler adminCommandHandler;
+    private final ChatDirectory chatDirectory;
+    private final AdminStatusReporter adminStatusReporter;
 
     @PostConstruct
     public void init() {
@@ -68,15 +90,17 @@ public class ZaraTelegramListener {
     private int onUpdates(final List<Update> updates) {
         for (final var u : updates) {
             if (u.callbackQuery() != null) {
+                final var from = u.callbackQuery().from();
+                if (from != null) {
+                    this.chatDirectory.record(from.id(), from.username(), from.firstName(), from.lastName());
+                }
                 handleCallback(u.callbackQuery());
                 continue;
             }
             if (u.message() != null && u.message().text() != null) {
-                final var chatId = u.message().chat().id();
-                final var messageText = u.message().text();
-
-
-                handleMessage(chatId, messageText.trim());
+                final var chat = u.message().chat();
+                this.chatDirectory.record(chat.id(), chat.username(), chat.firstName(), chat.lastName());
+                handleMessage(chat.id(), u.message().text().trim());
             }
         }
 
@@ -93,11 +117,30 @@ public class ZaraTelegramListener {
                 .selective(true);
     }
 
+    /**
+     * The admin chat gets its own bottom menu instead of the user one — the two menus are kept
+     * fully separate (the admin chat never enters the normal user flow).
+     */
+    private ReplyKeyboardMarkup adminMenuKeyboard() {
+        return new ReplyKeyboardMarkup(
+                new KeyboardButton[]{new KeyboardButton(ADM_BTN_STATS), new KeyboardButton(ADM_BTN_PRODUCTS)},
+                new KeyboardButton[]{new KeyboardButton(ADM_BTN_CHATS), new KeyboardButton(ADM_BTN_SEARCH)},
+                new KeyboardButton[]{new KeyboardButton(ADM_BTN_STATUS), new KeyboardButton(ADM_BTN_EVENTS)},
+                new KeyboardButton[]{new KeyboardButton(ADM_BTN_HELP)}
+        )
+                .resizeKeyboard(true)
+                .oneTimeKeyboard(false)
+                .selective(true);
+    }
+
+    private ReplyKeyboardMarkup bottomMenu(final long chatId) {
+        return this.adminCommandHandler.isAdmin(chatId) ? adminMenuKeyboard() : mainMenuKeyboard();
+    }
+
 
     private void handleMessage(long chatId, String text) {
-        final var adminReply = this.adminCommandHandler.tryHandle(chatId, text);
-        if (adminReply.isPresent()) {
-            send(chatId, adminReply.get());
+        if (this.adminCommandHandler.isAdmin(chatId)) {
+            handleAdminMessage(chatId, text);
             return;
         }
 
@@ -140,6 +183,280 @@ public class ZaraTelegramListener {
 
         send(chatId, "⏳ Получаю информацию о товаре...", null);
         this.scrapingExecutor.execute(() -> presentProductCard(chatId, link));
+    }
+
+    /**
+     * The admin chat is fully separate from the user flow: bottom-menu buttons and the /stats-family
+     * commands map to the read-only admin views, and anything else (including product links) falls back
+     * to the admin menu — the admin chat never scrapes a product or subscribes.
+     */
+    private void handleAdminMessage(final long chatId, final String text) {
+        final var t = text.trim();
+
+        if (t.equals(ADM_BTN_STATS)) {
+            send(chatId, this.adminCommandHandler.overview(), adminStatsKeyboard());
+            return;
+        }
+        if (t.equals(ADM_BTN_PRODUCTS)) {
+            openAdminProducts(chatId);
+            return;
+        }
+        if (t.equals(ADM_BTN_CHATS)) {
+            openAdminChats(chatId);
+            return;
+        }
+        if (t.equals(ADM_BTN_STATUS) || t.equalsIgnoreCase("/status")) {
+            send(chatId, this.adminStatusReporter.render(), adminStatusKeyboard());
+            return;
+        }
+        if (t.equals(ADM_BTN_EVENTS) || t.equalsIgnoreCase("/events")) {
+            send(chatId, this.adminStatusReporter.renderRecent(), adminEventsKeyboard());
+            return;
+        }
+        if (t.equals(ADM_BTN_SEARCH)) {
+            this.sessionCache.getOrCreate(chatId).setAwaitingAdminSearch(true);
+            send(chatId, "🔎 Введите запрос: имя/ключ товара, @username или id чата.");
+            return;
+        }
+        if (t.equals(ADM_BTN_HELP)) {
+            send(chatId, this.adminCommandHandler.help());
+            return;
+        }
+
+        final var lower = t.toLowerCase();
+        if (lower.startsWith("/find ")) {
+            performAdminSearch(chatId, t.substring("/find ".length()), true, true);
+            return;
+        }
+        if (lower.startsWith("/fp ")) {
+            performAdminSearch(chatId, t.substring("/fp ".length()), true, false);
+            return;
+        }
+        if (lower.startsWith("/fc ")) {
+            performAdminSearch(chatId, t.substring("/fc ".length()), false, true);
+            return;
+        }
+
+        final var session = this.sessionCache.getOrCreate(chatId);
+        if (session.isAwaitingAdminSearch()) {
+            session.setAwaitingAdminSearch(false);
+            performAdminSearch(chatId, t, true, true);
+            return;
+        }
+
+        final var reply = this.adminCommandHandler.tryHandle(chatId, t);
+        if (reply.isPresent()) {
+            send(chatId, reply.get());
+            return;
+        }
+
+        send(chatId, "🛠 Админ-панель. Выбирай в меню ниже или командами.\n\n" + this.adminCommandHandler.help());
+    }
+
+    /**
+     * Runs an admin search over products (key/name) and/or chats (id/@username) and returns the matches
+     * as tappable buttons (the same drill-down targets as the lists), capped so the result stays readable.
+     */
+    private void performAdminSearch(final long chatId, final String rawQuery, final boolean products, final boolean chats) {
+        final var query = rawQuery.trim();
+        final var productKeys = products ? this.adminCommandHandler.searchProductKeys(query) : List.<String>of();
+        final var chatIds = chats ? this.adminCommandHandler.searchChatIds(query) : List.<Long>of();
+
+        if (productKeys.isEmpty() && chatIds.isEmpty()) {
+            send(chatId, "🔎 По «" + query + "» ничего не найдено.");
+            return;
+        }
+
+        final var kb = new InlineKeyboardMarkup();
+        var shown = 0;
+        for (final var key : productKeys) {
+            if (shown++ >= ADMIN_SEARCH_CAP) {
+                break;
+            }
+            kb.addRow(adminProductButton(key));
+        }
+        for (final var id : chatIds) {
+            if (shown++ >= ADMIN_SEARCH_CAP) {
+                break;
+            }
+            kb.addRow(adminChatButton(id));
+        }
+
+        final var total = productKeys.size() + chatIds.size();
+        final var note = total > ADMIN_SEARCH_CAP ? " (показаны первые " + ADMIN_SEARCH_CAP + ", уточните запрос)" : "";
+        send(chatId, "🔎 Результаты по «" + query + "»" + note + ":", kb);
+    }
+
+    private void openAdminProducts(final long chatId) {
+        if (this.adminCommandHandler.menuProductKeys().isEmpty()) {
+            send(chatId, "Нет активных товаров.");
+            return;
+        }
+        send(chatId, "📦 Выбери товар:", adminProductsKeyboard(0));
+    }
+
+    private void openAdminChats(final long chatId) {
+        if (this.adminCommandHandler.menuChatIds().isEmpty()) {
+            send(chatId, "Нет активных чатов.");
+            return;
+        }
+        send(chatId, "👤 Выбери чат:", adminChatsKeyboard(0));
+    }
+
+    private void handleAdminCallback(final long chatId, final int messageId, final String data) {
+        if (data.equals(ADM_NOOP)) {
+            return;
+        }
+        if (data.equals(ADM_STATS)) {
+            editText(chatId, messageId, this.adminCommandHandler.overview(), adminStatsKeyboard());
+            return;
+        }
+        if (data.equals(ADM_STATUS)) {
+            editText(chatId, messageId, this.adminStatusReporter.render(), adminStatusKeyboard());
+            return;
+        }
+        if (data.equals(ADM_EVENTS)) {
+            editText(chatId, messageId, this.adminStatusReporter.renderRecent(), adminEventsKeyboard());
+            return;
+        }
+        if (data.equals(ADM_PRODUCTS)) {
+            showAdminProducts(chatId, messageId, 0);
+            return;
+        }
+        if (data.startsWith(ADM_PROD_PAGE_PREFIX)) {
+            showAdminProducts(chatId, messageId, parsePage(data, ADM_PROD_PAGE_PREFIX));
+            return;
+        }
+        if (data.startsWith(ADM_PRODUCT_PREFIX)) {
+            final var key = data.substring(ADM_PRODUCT_PREFIX.length());
+            editText(chatId, messageId, this.adminCommandHandler.productDetails(key), adminProductBackKeyboard(key));
+            return;
+        }
+        if (data.equals(ADM_CHATS)) {
+            showAdminChats(chatId, messageId, 0);
+            return;
+        }
+        if (data.startsWith(ADM_CHAT_PAGE_PREFIX)) {
+            showAdminChats(chatId, messageId, parsePage(data, ADM_CHAT_PAGE_PREFIX));
+            return;
+        }
+        if (data.startsWith(ADM_CHAT_PREFIX)) {
+            final var id = data.substring(ADM_CHAT_PREFIX.length());
+            editText(chatId, messageId, this.adminCommandHandler.chatDetails(id), adminChatBackKeyboard(id));
+        }
+    }
+
+    private void showAdminProducts(final long chatId, final int messageId, final int page) {
+        if (this.adminCommandHandler.menuProductKeys().isEmpty()) {
+            editText(chatId, messageId, "Нет активных товаров.", null);
+        } else {
+            editText(chatId, messageId, "📦 Выбери товар:", adminProductsKeyboard(page));
+        }
+    }
+
+    private void showAdminChats(final long chatId, final int messageId, final int page) {
+        if (this.adminCommandHandler.menuChatIds().isEmpty()) {
+            editText(chatId, messageId, "Нет активных чатов.", null);
+        } else {
+            editText(chatId, messageId, "👤 Выбери чат:", adminChatsKeyboard(page));
+        }
+    }
+
+    private int parsePage(final String data, final String prefix) {
+        try {
+            return Math.max(0, Integer.parseInt(data.substring(prefix.length())));
+        } catch (final NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private InlineKeyboardMarkup adminProductsKeyboard(final int page) {
+        final var buttons = new ArrayList<InlineKeyboardButton>();
+        for (final var key : this.adminCommandHandler.menuProductKeys()) {
+            buttons.add(adminProductButton(key));
+        }
+        return paginatedKeyboard(buttons, page, ADM_PROD_PAGE_PREFIX);
+    }
+
+    private InlineKeyboardButton adminProductButton(final String key) {
+        return new InlineKeyboardButton(
+                "👕 " + adminButtonLabel(this.adminCommandHandler.nameOf(key)) + " [" + key + "]")
+                .callbackData(ADM_PRODUCT_PREFIX + key);
+    }
+
+    private InlineKeyboardButton adminChatButton(final long id) {
+        return new InlineKeyboardButton("👤 " + adminButtonLabel(this.chatDirectory.label(id)))
+                .callbackData(ADM_CHAT_PREFIX + id);
+    }
+
+    private InlineKeyboardMarkup adminProductBackKeyboard(final String key) {
+        return new InlineKeyboardMarkup(
+                new InlineKeyboardButton("◀️ К товарам").callbackData(ADM_PRODUCTS),
+                new InlineKeyboardButton("🔄 Обновить").callbackData(ADM_PRODUCT_PREFIX + key));
+    }
+
+    private InlineKeyboardMarkup adminStatsKeyboard() {
+        return new InlineKeyboardMarkup(new InlineKeyboardButton("🔄 Обновить").callbackData(ADM_STATS));
+    }
+
+    private InlineKeyboardMarkup adminStatusKeyboard() {
+        return new InlineKeyboardMarkup(new InlineKeyboardButton("🔄 Обновить").callbackData(ADM_STATUS));
+    }
+
+    private InlineKeyboardMarkup adminEventsKeyboard() {
+        return new InlineKeyboardMarkup(new InlineKeyboardButton("🔄 Обновить").callbackData(ADM_EVENTS));
+    }
+
+    private InlineKeyboardMarkup adminChatsKeyboard(final int page) {
+        final var buttons = new ArrayList<InlineKeyboardButton>();
+        for (final var id : this.adminCommandHandler.menuChatIds()) {
+            buttons.add(adminChatButton(id));
+        }
+        return paginatedKeyboard(buttons, page, ADM_CHAT_PAGE_PREFIX);
+    }
+
+    /**
+     * Splits a long list of item buttons into pages of {@link #ADMIN_PAGE_SIZE}, appending a
+     * ◀️ / n·N / ▶️ navigation row (with the stateless page carried in the callback) only when there
+     * is more than one page. The page indicator is a no-op button ({@link #ADM_NOOP}).
+     */
+    private InlineKeyboardMarkup paginatedKeyboard(
+            final List<InlineKeyboardButton> items, final int page, final String pagePrefix) {
+        final var pages = Math.max(1, (items.size() + ADMIN_PAGE_SIZE - 1) / ADMIN_PAGE_SIZE);
+        final var current = Math.max(0, Math.min(page, pages - 1));
+        final var from = current * ADMIN_PAGE_SIZE;
+        final var to = Math.min(from + ADMIN_PAGE_SIZE, items.size());
+
+        final var kb = new InlineKeyboardMarkup();
+        for (int i = from; i < to; i++) {
+            kb.addRow(items.get(i));
+        }
+        if (pages > 1) {
+            final var nav = new ArrayList<InlineKeyboardButton>();
+            if (current > 0) {
+                nav.add(new InlineKeyboardButton("◀️").callbackData(pagePrefix + (current - 1)));
+            }
+            nav.add(new InlineKeyboardButton((current + 1) + "/" + pages).callbackData(ADM_NOOP));
+            if (current < pages - 1) {
+                nav.add(new InlineKeyboardButton("▶️").callbackData(pagePrefix + (current + 1)));
+            }
+            kb.addRow(nav.toArray(new InlineKeyboardButton[0]));
+        }
+        kb.addRow(new InlineKeyboardButton("🔄 Обновить").callbackData(pagePrefix + current));
+        return kb;
+    }
+
+    private InlineKeyboardMarkup adminChatBackKeyboard(final String id) {
+        return new InlineKeyboardMarkup(
+                new InlineKeyboardButton("◀️ К чатам").callbackData(ADM_CHATS),
+                new InlineKeyboardButton("🔄 Обновить").callbackData(ADM_CHAT_PREFIX + id));
+    }
+
+    private String adminButtonLabel(final String name) {
+        if (name == null) {
+            return "?";
+        }
+        return name.length() > 24 ? name.substring(0, 24) + "…" : name;
     }
 
     private void presentProductCard(final long chatId, final String link) {
@@ -197,6 +514,13 @@ public class ZaraTelegramListener {
 
 
         final var session = this.sessionCache.getOrCreate(chatId);
+
+        if (data != null && data.startsWith("ADM_")) {
+            if (this.adminCommandHandler.isAdmin(chatId)) {
+                handleAdminCallback(chatId, messageId, data);
+            }
+            return;
+        }
 
         if (CB_SUBS_MENU.equals(data)) {
             final var subs = this.subscriptionService.getAllSubscribedSizes(chatId);
@@ -761,13 +1085,13 @@ public class ZaraTelegramListener {
 
 
     private void send(long chatId, String text) {
-        telegramBot.execute(new SendMessage(chatId, text).replyMarkup(mainMenuKeyboard()));
+        telegramBot.execute(new SendMessage(chatId, text).replyMarkup(bottomMenu(chatId)));
     }
 
     private void send(long chatId, String text, InlineKeyboardMarkup kb) {
         SendMessage msg = new SendMessage(chatId, text);
         if (kb != null) msg.replyMarkup(kb);
-        else msg.replyMarkup(mainMenuKeyboard());
+        else msg.replyMarkup(bottomMenu(chatId));
         telegramBot.execute(msg);
     }
 

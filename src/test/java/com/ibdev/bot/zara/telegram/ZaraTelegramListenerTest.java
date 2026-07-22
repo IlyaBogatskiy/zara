@@ -53,7 +53,11 @@ class ZaraTelegramListenerTest {
 
     private final SessionCache sessionCache = new SessionCache();
     private final ScrapingExecutor scrapingExecutor = new ScrapingExecutor();
+    private final ChatDirectory chatDirectory = new ChatDirectory();
     private final Gson gson = new Gson();
+
+    @Mock
+    private AdminStatusReporter adminStatusReporter;
 
     private UpdatesListener listener;
 
@@ -61,7 +65,8 @@ class ZaraTelegramListenerTest {
     void captureListener() {
         final var bot = new ZaraTelegramListener(
                 sessionCache, telegramBot, productCardCache, subscriptionService, scrapingExecutor,
-                new AdminCommandHandler(subscriptionService, new ZaraProperties())
+                new AdminCommandHandler(subscriptionService, new ZaraProperties(), chatDirectory), chatDirectory,
+                adminStatusReporter
         );
         bot.init();
 
@@ -361,5 +366,326 @@ class ZaraTelegramListenerTest {
         assertThat(text).contains("S 💰");
         assertThat(text).doesNotContain("M 💰");
         assertThat(text).contains("💰 — слежу за ценой");
+    }
+
+    // --- admin menu (separate from the user menu) ---
+
+    private UpdatesListener adminListener() {
+        final var props = new ZaraProperties();
+        props.setAdminChatId(CHAT);
+        new ZaraTelegramListener(sessionCache, telegramBot, productCardCache, subscriptionService, scrapingExecutor,
+                new AdminCommandHandler(subscriptionService, props, chatDirectory), chatDirectory,
+                adminStatusReporter).init();
+        final var captor = ArgumentCaptor.forClass(UpdatesListener.class);
+        verify(telegramBot, atLeastOnce()).setUpdatesListener(captor.capture());
+        return captor.getAllValues().get(captor.getAllValues().size() - 1);
+    }
+
+    private void processText(final UpdatesListener l, final String text) {
+        l.process(List.of(gson.fromJson(
+                "{\"message\":{\"message_id\":10,\"chat\":{\"id\":" + CHAT + "},\"text\":\"" + text + "\"}}",
+                Update.class)));
+    }
+
+    private void processCallback(final UpdatesListener l, final String data) {
+        l.process(List.of(gson.fromJson(
+                "{\"callback_query\":{\"id\":\"cb\",\"data\":\"" + data + "\"," +
+                        "\"message\":{\"message_id\":10,\"chat\":{\"id\":" + CHAT + "}}}}",
+                Update.class)));
+    }
+
+    private void stubAdminData() {
+        when(subscriptionService.activeProductKeys()).thenReturn(new LinkedHashSet<>(List.of("K1", "K2")));
+        when(subscriptionService.getActiveWatches("K1"))
+                .thenReturn(List.of(new SubscriptionService.Watch(1L, "S", AWAIT_RESTOCK),
+                        new SubscriptionService.Watch(2L, "M", WATCH_IN_STOCK)));
+        when(subscriptionService.getActiveWatches("K2"))
+                .thenReturn(List.of(new SubscriptionService.Watch(1L, "L", AWAIT_RESTOCK)));
+        when(subscriptionService.getSubscribersByProduct("K1")).thenReturn(Map.of(1L, Set.of("S"), 2L, Set.of("M")));
+        when(subscriptionService.getSubscribersByProduct("K2")).thenReturn(Map.of(1L, Set.of("L")));
+        when(subscriptionService.findProductRef("K1"))
+                .thenReturn(new SubscriptionService.ProductRef("https://z/k1", "Куртка"));
+        when(subscriptionService.findProductRef("K2"))
+                .thenReturn(new SubscriptionService.ProductRef("https://z/k2", "Джинсы"));
+        when(subscriptionService.loadLastKnownPrices()).thenReturn(Map.of());
+    }
+
+    @Test
+    void adminProductsButtonShowsPerProductButtons() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "📦 Товары");
+
+        assertThat(callbackDatas(markupOf(requests(1).getLast()))).contains("ADM_PRODUCT:K1", "ADM_PRODUCT:K2");
+    }
+
+    @Test
+    void adminProductCallbackShowsDetailsWithBackButton() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processCallback(admin, "ADM_PRODUCT:K1");
+
+        final var msg = requests(1).getLast();
+        assertThat(textOf(msg)).contains("Куртка", "чат 1");
+        assertThat(callbackDatas(markupOf(msg))).contains("ADM_PRODUCTS");
+    }
+
+    @Test
+    void adminChatsButtonShowsPerChatButtons() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "👤 Чаты");
+
+        assertThat(callbackDatas(markupOf(requests(1).getLast()))).contains("ADM_CHAT:1", "ADM_CHAT:2");
+    }
+
+    @Test
+    void adminStatsButtonShowsOverview() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "📊 Статистика");
+
+        assertThat(textOf(requests(1).getLast())).contains("Товаров в мониторинге", "Уникальных чатов");
+    }
+
+    @Test
+    void adminProductLinkDoesNotEnterUserFlow() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "https://www.zara.com/x-p12345.html");
+
+        verify(productCardCache, never()).getOrLoad(any(), any());
+    }
+
+    @Test
+    void nonAdminCannotUseAdminCallback() {
+        sendCallback("ADM_PRODUCTS");
+
+        verify(subscriptionService, never()).getSubscribersByProduct(any());
+    }
+
+    @Test
+    void adminProductsFirstPageShowsEightItemsAndNextNav() {
+        final var keys = new LinkedHashSet<String>();
+        for (int i = 0; i < 20; i++) {
+            keys.add(String.format("K%02d", i));
+        }
+        when(subscriptionService.activeProductKeys()).thenReturn(keys);
+        final var admin = adminListener();
+
+        processText(admin, "📦 Товары");
+
+        final var data = callbackDatas(markupOf(requests(1).getLast()));
+        assertThat(data).contains("ADM_PRODUCT:K00", "ADM_PRODUCT:K07", "ADM_PROD_PAGE:1");
+        assertThat(data).doesNotContain("ADM_PRODUCT:K08");
+    }
+
+    @Test
+    void adminProductsSecondPageShowsPrevAndNextNav() {
+        final var keys = new LinkedHashSet<String>();
+        for (int i = 0; i < 20; i++) {
+            keys.add(String.format("K%02d", i));
+        }
+        when(subscriptionService.activeProductKeys()).thenReturn(keys);
+        final var admin = adminListener();
+
+        processCallback(admin, "ADM_PROD_PAGE:1");
+
+        final var data = callbackDatas(markupOf(requests(1).getLast()));
+        assertThat(data).contains("ADM_PRODUCT:K08", "ADM_PRODUCT:K15", "ADM_PROD_PAGE:0", "ADM_PROD_PAGE:2");
+        assertThat(data).doesNotContain("ADM_PRODUCT:K07", "ADM_PRODUCT:K16");
+    }
+
+    @Test
+    void adminProductsSinglePageHasNoNav() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "📦 Товары");
+
+        final var data = callbackDatas(markupOf(requests(1).getLast()));
+        assertThat(data).contains("ADM_PRODUCT:K1", "ADM_PRODUCT:K2");
+        assertThat(data).doesNotContain("ADM_PROD_PAGE:1", "ADM_NOOP");
+    }
+
+    @Test
+    void adminChatsPaginate() {
+        final var subs = new java.util.HashMap<Long, Set<String>>();
+        for (long i = 1; i <= 20; i++) {
+            subs.put(i, Set.of("S"));
+        }
+        when(subscriptionService.activeProductKeys()).thenReturn(new LinkedHashSet<>(List.of("K1")));
+        when(subscriptionService.getSubscribersByProduct("K1")).thenReturn(subs);
+        final var admin = adminListener();
+
+        processText(admin, "👤 Чаты");
+
+        final var data = callbackDatas(markupOf(requests(1).getLast()));
+        assertThat(data).contains("ADM_CHAT:1", "ADM_CHAT:8", "ADM_CHAT_PAGE:1");
+        assertThat(data).doesNotContain("ADM_CHAT:9");
+    }
+
+    @Test
+    void adminProductDetailsHasRefreshAndBack() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processCallback(admin, "ADM_PRODUCT:K1");
+
+        assertThat(callbackDatas(markupOf(requests(1).getLast()))).contains("ADM_PRODUCTS", "ADM_PRODUCT:K1");
+    }
+
+    @Test
+    void adminChatDetailsHasRefreshAndBack() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processCallback(admin, "ADM_CHAT:1");
+
+        assertThat(callbackDatas(markupOf(requests(1).getLast()))).contains("ADM_CHATS", "ADM_CHAT:1");
+    }
+
+    @Test
+    void adminProductsListHasRefresh() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "📦 Товары");
+
+        assertThat(callbackDatas(markupOf(requests(1).getLast()))).contains("ADM_PROD_PAGE:0");
+    }
+
+    @Test
+    void adminStatsShowsRefreshButton() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "📊 Статистика");
+
+        assertThat(callbackDatas(markupOf(requests(1).getLast()))).contains("ADM_STATS");
+    }
+
+    @Test
+    void adminStatsRefreshReRendersOverview() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processCallback(admin, "ADM_STATS");
+
+        assertThat(textOf(requests(1).getLast())).contains("Товаров в мониторинге");
+    }
+
+    @Test
+    void adminFindUnifiedReturnsProductsAndChats() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "/find 1");
+
+        assertThat(callbackDatas(markupOf(requests(1).getLast()))).contains("ADM_PRODUCT:K1", "ADM_CHAT:1");
+    }
+
+    @Test
+    void adminFindProductScopeReturnsOnlyProducts() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "/fp 1");
+
+        final var data = callbackDatas(markupOf(requests(1).getLast()));
+        assertThat(data).contains("ADM_PRODUCT:K1");
+        assertThat(data).noneMatch(d -> d.startsWith("ADM_CHAT:"));
+    }
+
+    @Test
+    void adminFindChatScopeReturnsOnlyChats() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "/fc 1");
+
+        final var data = callbackDatas(markupOf(requests(1).getLast()));
+        assertThat(data).contains("ADM_CHAT:1");
+        assertThat(data).noneMatch(d -> d.startsWith("ADM_PRODUCT:"));
+    }
+
+    @Test
+    void adminSearchButtonPromptsThenNextMessageSearches() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "🔎 Поиск");
+        processText(admin, "курт");
+
+        assertThat(callbackDatas(markupOf(requests(2).getLast()))).contains("ADM_PRODUCT:K1");
+    }
+
+    @Test
+    void adminFindNoMatchReports() {
+        stubAdminData();
+        final var admin = adminListener();
+
+        processText(admin, "/find zzz");
+
+        assertThat(textOf(requests(1).getLast())).contains("не найдено");
+    }
+
+    @Test
+    void adminStatusButtonShowsStatusWithRefresh() {
+        when(adminStatusReporter.render()).thenReturn("🩺 Статус мониторинга\nТик #1");
+        final var admin = adminListener();
+
+        processText(admin, "🩺 Статус");
+
+        final var msg = requests(1).getLast();
+        assertThat(textOf(msg)).contains("Статус мониторинга");
+        assertThat(callbackDatas(markupOf(msg))).contains("ADM_STATUS");
+    }
+
+    @Test
+    void adminStatusRefreshCallbackReRenders() {
+        when(adminStatusReporter.render()).thenReturn("🩺 Статус мониторинга\nТик #2");
+        final var admin = adminListener();
+
+        processCallback(admin, "ADM_STATUS");
+
+        assertThat(textOf(requests(1).getLast())).contains("Статус мониторинга");
+    }
+
+    @Test
+    void adminEventsButtonShowsRecentWithRefresh() {
+        when(adminStatusReporter.renderRecent()).thenReturn("🕓 Последние события:\n2м назад · ✅ Куртка");
+        final var admin = adminListener();
+
+        processText(admin, "🕓 События");
+
+        final var msg = requests(1).getLast();
+        assertThat(textOf(msg)).contains("Последние события");
+        assertThat(callbackDatas(markupOf(msg))).contains("ADM_EVENTS");
+    }
+
+    @Test
+    void adminEventsRefreshCallbackReRenders() {
+        when(adminStatusReporter.renderRecent()).thenReturn("🕓 Последние события:\n…");
+        final var admin = adminListener();
+
+        processCallback(admin, "ADM_EVENTS");
+
+        assertThat(textOf(requests(1).getLast())).contains("Последние события");
+    }
+
+    @Test
+    void capturesUsernameFromIncomingMessage() {
+        listener.process(List.of(gson.fromJson(
+                "{\"message\":{\"message_id\":10,\"chat\":{\"id\":" + CHAT
+                        + ",\"username\":\"bob\",\"first_name\":\"Bob\"},\"text\":\"/start\"}}",
+                Update.class)));
+
+        assertThat(chatDirectory.label(CHAT)).isEqualTo("чат " + CHAT + " · @bob");
     }
 }

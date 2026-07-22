@@ -14,8 +14,9 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class ZaraApiClientTest {
 
+    private final ZaraProperties properties = new ZaraProperties();
     private final ZaraApiClient client = new ZaraApiClient(
-            new ZaraApiConfig().zaraRestClient(new ZaraProperties())
+            new ZaraApiConfig().zaraRestClient(properties), properties
     );
 
     @Test
